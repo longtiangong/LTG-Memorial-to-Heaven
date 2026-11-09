@@ -6,10 +6,10 @@ st.set_page_config(page_title="光明燈疏文生成系統", layout="wide")
 st.title("🪔 500元光明燈 A3 疏文生成系統")
 
 # 讀取 Secrets
-sheet_id = st.secrets.get("SHEET_500_ID", "")
-pdf_id = st.secrets.get("SHUWEN_PDF_ID", "")
-web_app_url = st.secrets.get("WEB_APP_URL", "")
-gas_api_key = st.secrets.get("GAS_API_KEY", "")
+# sheet_id = st.secrets.get("SHEET_500_ID", "")
+# pdf_id = st.secrets.get("SHUWEN_PDF_ID", "")
+# web_app_url = st.secrets.get("WEB_APP_URL", "")
+# gas_api_key = st.secrets.get("GAS_API_KEY", "")
 
 st.sidebar.header("系統參數狀態")
 st.sidebar.text_input("Google Sheet ID", value=sheet_id, disabled=True)
