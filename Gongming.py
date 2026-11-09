@@ -40,9 +40,10 @@ if st.button("🚀 開始產出 A3 疏文文件"):
                     st.markdown(
                         f"👉 [下載 A3 橫式 Word 檔]({result['wordDownloadUrl']})"
                     )
+                    # * 11092332 預設字體16 pt，資料欄相鄰間距 3 pt
                     st.caption(
                         "Word 檔文字已旋轉 270°；Google 文件為維持可編輯，"
-                        "其正文無法套用此旋轉。字體預設 20 pt；同址資料放不下時"
+                        "其正文無法套用此旋轉。字體預設 16 pt；同址資料放不下時"
                         "會自動縮小，最小 8 pt。"
                     )
                 elif result.get("status") == "success":
