@@ -27,11 +27,27 @@ if st.button("🚀 開始產出 A3 疏文文件"):
                 response = requests.post(web_app_url, json=payload, timeout=60)
                 result = response.json()
 
-                if result.get("status") == "success":
-                    st.success("🎉 疏文生成成功！")
+                if (
+                    result.get("status") == "success"
+                    and result.get("url")
+                    and result.get("wordDownloadUrl")
+                ):
+                    st.success("🎉 Google 文件與 Word 文件產出成功！")
                     st.markdown(
                         f"👉 [點此開啟產出的 Google Doc 文件]({result.get('url')})"
                     )
+                    st.markdown(
+                        f"👉 [下載 A3 直式橫書 Word 檔]({result['wordDownloadUrl']})"
+                    )
+                elif result.get("status") == "success":
+                    st.error(
+                        "GAS 未回傳 Google 文件或 Word 檔連結，"
+                        "請更新並重新部署 GAS 後再試。"
+                    )
+                    if result.get("url"):
+                        st.markdown(
+                            f"👉 [開啟已產出的 Google Doc 文件]({result['url']})"
+                        )
                 else:
                     st.error(f"生成失敗: {result.get('message')}")
             except Exception as e:
