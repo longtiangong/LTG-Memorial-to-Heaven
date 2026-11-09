@@ -4,17 +4,6 @@ function authorizeDriveAccess() {
   DriveApp.getRootFolder().getName();
 }
 
-function authorizeExternalRequest() {
-  const response = UrlFetchApp.fetch("https://www.google.com/robots.txt", {
-    muteHttpExceptions: true,
-  });
-  if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) {
-    throw new Error(
-      `外部請求授權測試失敗：HTTP ${response.getResponseCode()}`
-    );
-  }
-}
-
 function authorizeSpreadsheetAccess() {
   const sheetId = PropertiesService.getScriptProperties().getProperty("SHEET_500_ID");
   if (!sheetId) {
@@ -38,11 +27,10 @@ function doPost(e) {
     PropertiesService.getScriptProperties().setProperty("SHEET_500_ID", sheetId);
     
     // 執行疏文生成
-    const files = generateShuWenDoc(sheetId, docTitle);
+    const files = generateWordDocument(sheetId, docTitle);
     
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",
-      url: files.docUrl,
       wordUrl: files.wordUrl,
       wordDownloadUrl: files.wordDownloadUrl,
     }))
@@ -53,7 +41,7 @@ function doPost(e) {
   }
 }
 
-function generateShuWenDoc(sheetId, docTitle) {
+function generateWordDocument(sheetId, docTitle) {
   const ss = SpreadsheetApp.openById(sheetId);
   const sheet = ss.getSheetByName("500元光明燈");
   if (!sheet) throw new Error("找不到『500元光明燈』工作表");
@@ -106,81 +94,72 @@ function generateShuWenDoc(sheetId, docTitle) {
   });
   if (groups.length === 0) throw new Error("找不到可產生的光明燈資料");
 
-  const doc = DocumentApp.create(docTitle);
-  const body = doc.getBody();
-
-  body.setPageWidth(841.89);
-  body.setPageHeight(1190.55);
-  body.setMarginTop(56.69);
-  body.setMarginBottom(56.69);
-  body.setMarginLeft(56.69);
-  body.setMarginRight(56.69);
-  appendAddressGroups(body, groups);
-
-  doc.saveAndClose();
   const wordFile = createA3PortraitWordFile(groups, docTitle);
   return {
-    docUrl: doc.getUrl(),
     wordUrl: wordFile.getUrl(),
     wordDownloadUrl: `https://drive.google.com/uc?export=download&id=${wordFile.getId()}`,
   };
 }
 
-function appendAddressGroups(body, groups) {
-  const pageCapacity = 1040;
-  const leftWidth = 335.91;
-  const middleGap = 56.69;
-  let page = [];
-  let currentColumn = 0;
-  let usedHeight = [0, 0];
-  let hasPage = false;
-
-  function flushPage() {
-    if (page.length === 0) return;
-    if (hasPage) body.appendPageBreak();
-    const layout = body.appendTable([["", "", ""]]);
-    layout.setBorderWidth(0);
-    layout.setColumnWidth(0, leftWidth);
-    layout.setColumnWidth(1, middleGap);
-    layout.setColumnWidth(2, leftWidth);
-    page.forEach(item => appendAddressGroup(layout.getCell(0, item.column === 0 ? 0 : 2), item.group));
-    hasPage = true;
-    page = [];
-    currentColumn = 0;
-    usedHeight = [0, 0];
-  }
+function buildWordDocumentXml(groups) {
+  const pageCapacity = 1077.17;
+  const contentWidth = 728.51;
+  let usedHeight = 0;
+  let breakBeforeNextGroup = false;
+  const content = [];
 
   groups.forEach(group => {
-    group.fontSize = getAddressGroupFontSize(group, pageCapacity);
-    const height = estimateAddressGroupHeight(group, group.fontSize);
-    if (!height || height > pageCapacity) {
-      throw new Error(
-        `住址「${group.address}」的資料即使縮至 8 pt 仍無法完整放在同一頁。`
-      );
+    if (breakBeforeNextGroup) {
+      content.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+      usedHeight = 0;
+      breakBeforeNextGroup = false;
     }
-    if (usedHeight[currentColumn] + height > pageCapacity) currentColumn++;
-    if (currentColumn > 1) {
-      flushPage();
+
+    group.fontSize = getAddressGroupFontSize(group, pageCapacity, contentWidth);
+    const height = estimateAddressGroupHeight(group, group.fontSize, contentWidth);
+    if (usedHeight > 0 && (height > pageCapacity || usedHeight + height > pageCapacity)) {
+      content.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+      usedHeight = 0;
     }
-    page.push({ group, column: currentColumn });
-    usedHeight[currentColumn] += height;
+
+    content.push(buildWordTable([[group.address]], [14570], group.fontSize, true, 0));
+    const memberWidths = Array(8).fill(Math.floor(14570 / 8));
+    memberWidths[7] += 14570 - memberWidths.reduce((total, width) => total + width, 0);
+    group.members.forEach(member => {
+      content.push(buildWordTable([member], memberWidths, group.fontSize, false, 30));
+    });
+
+    if (height > pageCapacity) {
+      breakBeforeNextGroup = true;
+    } else {
+      usedHeight += height;
+    }
   });
-  flushPage();
+
+  const section = [
+    '<w:sectPr>',
+    '<w:pgSz w:w="16838" w:h="23811"/>',
+    '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="0" w:footer="0" w:gutter="0"/>',
+    '</w:sectPr>',
+  ].join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+    `<w:body>${content.join("")}${section}</w:body></w:document>`;
 }
 
-function getAddressGroupFontSize(group, pageCapacity) {
+function getAddressGroupFontSize(group, pageCapacity, contentWidth) {
   // * 11092332 預設字體16 pt，資料欄相鄰間距 3 pt
   for (let fontSize = 16; fontSize >= 8; fontSize--) {
-    if (estimateAddressGroupHeight(group, fontSize) <= pageCapacity) {
+    if (estimateAddressGroupHeight(group, fontSize, contentWidth) <= pageCapacity) {
       return fontSize;
     }
   }
   return 8;
 }
 
-function estimateAddressGroupHeight(group, fontSize) {
-  const addressLines = estimateWrappedLines(group.address, 335.91, fontSize);
-  const fieldWidth = 335.91 / 8 - 3;
+function estimateAddressGroupHeight(group, fontSize, contentWidth) {
+  const addressLines = estimateWrappedLines(group.address, contentWidth, fontSize);
+  const fieldWidth = contentWidth / 8 - 3;
   const rowsHeight = group.members.reduce((total, member) => {
     const lineCount = Math.max(
       ...member.map(value => estimateWrappedLines(value, fieldWidth, fontSize))
@@ -201,130 +180,36 @@ function normalizeAddress(address) {
   return String(address || "").replace(/[\s\u3000]+/g, "").trim();
 }
 
-function appendAddressGroup(container, group) {
-  const addressLine = container.appendTable([[group.address]]);
-  addressLine.setBorderWidth(0);
-  addressLine.setColumnWidth(0, 335.91);
-  const addressCell = addressLine.getCell(0, 0);
-  addressCell.setPaddingTop(0);
-  addressCell.setPaddingBottom(0);
-  addressCell.setPaddingLeft(0);
-  addressCell.setPaddingRight(0);
-  addressCell.editAsText().setFontSize(group.fontSize).setBold(true);
-
-  group.members.forEach(member => {
-    const row = container.appendTable([member]);
-    row.setBorderWidth(0);
-    for (let column = 0; column < member.length; column++) {
-      const cell = row.getCell(0, column);
-      cell.setWidth(335.91 / 8);
-      cell.setPaddingTop(0);
-      cell.setPaddingBottom(0);
-      // * 11092332 預設字體16 pt，資料欄相鄰間距 3 pt
-      cell.setPaddingLeft(1.5);
-      cell.setPaddingRight(1.5);
-      cell.editAsText().setFontSize(group.fontSize);
-    }
-  });
+function buildWordTable(rows, columnWidths, fontSize, bold, cellMargin) {
+  const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
+  const borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
+    .map(edge => `<w:${edge} w:val="nil"/>`).join("");
+  const grid = columnWidths.map(width => `<w:gridCol w:w="${width}"/>`).join("");
+  const tableRows = rows.map(row => {
+    const cells = row.map((value, index) => {
+      const width = columnWidths[index];
+      const boldProperty = bold ? "<w:b/>" : "";
+      return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
+        '<w:textDirection w:val="btLr"/><w:vAlign w:val="center"/></w:tcPr>' +
+        '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
+        `<w:r><w:rPr>${boldProperty}<w:sz w:val="${fontSize * 2}"/>` +
+        `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
+    }).join("");
+    return `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
+  }).join("");
+  return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
+    `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
+    `<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="${cellMargin}" w:type="dxa"/>` +
+    `<w:bottom w:w="0" w:type="dxa"/><w:right w:w="${cellMargin}" w:type="dxa"/></w:tblCellMar>` +
+    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>` +
+    `${tableRows}</w:tbl>`;
 }
 
-function createA3PortraitWordFile(groups, docTitle) {
-  const wordDoc = DocumentApp.create(`${docTitle}_A3直式`);
-  try {
-    const body = wordDoc.getBody();
-    body.setPageWidth(841.89);
-    body.setPageHeight(1190.55);
-    body.setMarginTop(56.69);
-    body.setMarginBottom(56.69);
-    body.setMarginLeft(56.69);
-    body.setMarginRight(56.69);
-    appendAddressGroups(body, groups);
-
-    wordDoc.saveAndClose();
-    const exportResponse = UrlFetchApp.fetch(
-      `https://docs.google.com/document/d/${wordDoc.getId()}/export?format=docx`,
-      {
-        headers: {
-          Authorization: `Bearer ${ScriptApp.getOAuthToken()}`,
-        },
-        muteHttpExceptions: true,
-      }
-    );
-    if (exportResponse.getResponseCode() !== 200) {
-      throw new Error(
-        `Google 文件匯出 Word 失敗 (${exportResponse.getResponseCode()}): ` +
-        exportResponse.getContentText().slice(0, 500)
-      );
-    }
-
-    const blob = exportResponse.getBlob()
-      .setContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-      .setName(`${docTitle}_A3直式.docx`);
-    const signature = blob.getBytes();
-    if (signature.length < 2 || signature[0] !== 80 || signature[1] !== 75) {
-      throw new Error("Google 文件匯出結果不是有效的 Word（DOCX）檔案");
-    }
-
-    const rotatedBlob = rotateWordTableText(blob);
-    const wordFile = DriveApp.createFile(rotatedBlob);
-    DriveApp.getFileById(wordDoc.getId()).setTrashed(true);
-    return wordFile;
-  } catch (error) {
-    DriveApp.getFileById(wordDoc.getId()).setTrashed(true);
-    throw error;
-  }
-}
-
-// * 11092304 Word 文字270 度旋轉：更新 DOCX XML 的儲存格文字方向。
-function rotateWordTableText(docxBlob) {
-  const zipBlob = docxBlob.copyBlob().setContentType("application/zip");
-  const entries = Utilities.unzip(zipBlob);
-  let documentXmlFound = false;
-  const updatedEntries = entries.map(entry => {
-    if (entry.getName() !== "word/document.xml") return entry;
-    documentXmlFound = true;
-    const xmlDocument = XmlService.parse(entry.getDataAsString("UTF-8"));
-    const root = xmlDocument.getRootElement();
-    const wordNamespace = root.getNamespace();
-    rotateTextCells(root, wordNamespace);
-    return Utilities.newBlob(
-      XmlService.getRawFormat().format(xmlDocument),
-      MimeType.XML,
-      entry.getName()
-    );
-  });
-  if (!documentXmlFound) throw new Error("Word 檔缺少 document.xml，無法旋轉文字");
-  return Utilities.zip(updatedEntries, docxBlob.getName())
-    .setContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-}
-
-function rotateTextCells(element, wordNamespace) {
-  if (element.getName() === "tc") {
-    const hasText = element.getChildren("p", wordNamespace)
-      .some(paragraph => getXmlText(paragraph).trim() !== "");
-    if (hasText) {
-      let properties = element.getChild("tcPr", wordNamespace);
-      if (!properties) {
-        properties = XmlService.createElement("tcPr", wordNamespace);
-        element.addContent(0, properties);
-      }
-      let direction = properties.getChild("textDirection", wordNamespace);
-      if (!direction) {
-        direction = XmlService.createElement("textDirection", wordNamespace);
-        properties.addContent(direction);
-      }
-      direction.setAttribute("val", "btLr", wordNamespace);
-    }
-  }
-  element.getChildren().forEach(child => rotateTextCells(child, wordNamespace));
-}
-
-function getXmlText(element) {
-  let text = element.getText() || "";
-  element.getChildren().forEach(child => {
-    text += getXmlText(child);
-  });
-  return text;
+function escapeXml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function getCellText(value, timezone, datePattern) {
@@ -332,4 +217,32 @@ function getCellText(value, timezone, datePattern) {
     return Utilities.formatDate(value, timezone, datePattern || "yyyy年MM月dd日");
   }
   return value == null ? "" : String(value).trim();
+}
+
+// * 11092304 Word 文字270 度旋轉，A3直向
+function createA3PortraitWordFile(groups, docTitle) {
+  const files = [
+    Utilities.newBlob(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '</Types>',
+      "application/xml",
+      "[Content_Types].xml"
+    ),
+    Utilities.newBlob(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+      '</Relationships>',
+      "application/xml",
+      "_rels/.rels"
+    ),
+    Utilities.newBlob(buildWordDocumentXml(groups), "application/xml", "word/document.xml"),
+  ];
+  const docxBlob = Utilities.zip(files, `${docTitle}_A3直式.docx`)
+    .setContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  return DriveApp.createFile(docxBlob);
 }
