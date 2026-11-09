@@ -74,6 +74,17 @@ if st.button("🚀 開始產出 A3 疏文文件"):
                             "以實際試算表 ID 執行一次授權，再建立新部署版本。"
                         )
                         st.caption(f"Google 回傳訊息：{message}")
+                    elif (
+                        "UrlFetchApp.fetch" in message
+                        or "auth/script.external_request" in message
+                    ):
+                        st.error(
+                            "GAS 尚未取得外部請求授權。請確認 appsscript.json "
+                            "含有 script.external_request 權限，在 Apps Script "
+                            "編輯器執行 authorizeExternalRequest() 並完成授權，"
+                            "再建立新部署版本。"
+                        )
+                        st.caption(f"Google 回傳訊息：{message}")
                     else:
                         st.error(f"生成失敗: {message}")
             except Exception as e:
