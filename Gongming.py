@@ -36,8 +36,14 @@ if st.button("🚀 開始產出 A3 疏文文件"):
                     st.markdown(
                         f"👉 [點此開啟產出的 Google Doc 文件]({result.get('url')})"
                     )
+                    # * 11092304 Word 文字270 度旋轉，A3直向
                     st.markdown(
-                        f"👉 [下載 A3 橫式 Word 檔]({result['wordDownloadUrl']})"
+                        f"👉 [下載 A3 直式 Word 檔]({result['wordDownloadUrl']})"
+                    )
+                    st.caption(
+                        "Word 檔文字已旋轉 270°；Google 文件為維持可編輯，"
+                        "其正文無法套用此旋轉。字體預設 20 pt；同址資料放不下時"
+                        "會自動縮小，最小 8 pt。"
                     )
                 elif result.get("status") == "success":
                     st.error(
