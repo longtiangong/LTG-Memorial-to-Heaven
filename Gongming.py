@@ -49,6 +49,15 @@ if st.button("🚀 開始產出 A3 疏文文件"):
                             f"👉 [開啟已產出的 Google Doc 文件]({result['url']})"
                         )
                 else:
-                    st.error(f"生成失敗: {result.get('message')}")
+                    message = result.get("message", "未知錯誤")
+                    if "DriveApp" in message or "auth/drive" in message:
+                        st.error(
+                            "GAS 尚未取得 Google Drive 授權。請在 Apps Script "
+                            "編輯器執行 authorizeDriveAccess() 並完成授權，"
+                            "再建立新部署版本。"
+                        )
+                        st.caption(f"Google 回傳訊息：{message}")
+                    else:
+                        st.error(f"生成失敗: {message}")
             except Exception as e:
                 st.error(f"連線至 GAS Web App 發生錯誤: {e}")
