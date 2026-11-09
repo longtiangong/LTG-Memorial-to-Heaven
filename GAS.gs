@@ -125,8 +125,9 @@ function buildWordDocumentXml(groups) {
     content.push(buildWordTable([[group.address]], [14570], group.fontSize, true, 0));
     const memberWidths = Array(8).fill(Math.floor(14570 / 8));
     memberWidths[7] += 14570 - memberWidths.reduce((total, width) => total + width, 0);
+    // * 11100007 A、B欄光明燈號碼改為橫向，上下間距5 pt
     group.members.forEach(member => {
-      content.push(buildWordTable([member], memberWidths, group.fontSize, false, 30));
+      content.push(buildWordTable([member], memberWidths, group.fontSize, false, 30, true, 50));
     });
 
     if (height > pageCapacity) {
@@ -164,7 +165,8 @@ function estimateAddressGroupHeight(group, fontSize, contentWidth) {
     const lineCount = Math.max(
       ...member.map(value => estimateWrappedLines(value, fieldWidth, fontSize))
     );
-    return total + lineCount * fontSize * 1.2;
+    // * 11100007 每筆資料列上下間距合計5 pt
+    return total + lineCount * fontSize * 1.2 + 5;
   }, 0);
   return addressLines * fontSize * 1.2 + rowsHeight;
 }
@@ -180,7 +182,7 @@ function normalizeAddress(address) {
   return String(address || "").replace(/[\s\u3000]+/g, "").trim();
 }
 
-function buildWordTable(rows, columnWidths, fontSize, bold, cellMargin) {
+function buildWordTable(rows, columnWidths, fontSize, bold, cellMargin, keepLampNumbersInline, verticalCellMargin) {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
     .map(edge => `<w:${edge} w:val="nil"/>`).join("");
@@ -189,8 +191,13 @@ function buildWordTable(rows, columnWidths, fontSize, bold, cellMargin) {
     const cells = row.map((value, index) => {
       const width = columnWidths[index];
       const boldProperty = bold ? "<w:b/>" : "";
+      // * 11100007 A、B欄光明燈號碼橫向且不換行
+      const keepInline = keepLampNumbersInline && index < 2;
+      const direction = keepInline ? "lrTb" : "btLr";
+      const noWrap = keepInline ? "<w:noWrap/>" : "";
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
-        '<w:textDirection w:val="btLr"/><w:vAlign w:val="center"/></w:tcPr>' +
+        `${noWrap}<w:textDirection w:val="${direction}"/>` +
+        '<w:vAlign w:val="center"/></w:tcPr>' +
         '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
         `<w:r><w:rPr>${boldProperty}<w:sz w:val="${fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
@@ -199,8 +206,10 @@ function buildWordTable(rows, columnWidths, fontSize, bold, cellMargin) {
   }).join("");
   return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
-    `<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="${cellMargin}" w:type="dxa"/>` +
-    `<w:bottom w:w="0" w:type="dxa"/><w:right w:w="${cellMargin}" w:type="dxa"/></w:tblCellMar>` +
+    `<w:tblCellMar><w:top w:w="${verticalCellMargin || 0}" w:type="dxa"/>` +
+    `<w:left w:w="${cellMargin}" w:type="dxa"/>` +
+    `<w:bottom w:w="${verticalCellMargin || 0}" w:type="dxa"/>` +
+    `<w:right w:w="${cellMargin}" w:type="dxa"/></w:tblCellMar>` +
     `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>` +
     `${tableRows}</w:tbl>`;
 }
