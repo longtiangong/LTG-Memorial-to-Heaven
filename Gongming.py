@@ -50,7 +50,14 @@ if st.button("🚀 開始產出 A3 疏文文件"):
                         )
                 else:
                     message = result.get("message", "未知錯誤")
-                    if "DriveApp" in message or "auth/drive" in message:
+                    if "Converting from application/vnd.google-apps.document" in message:
+                        st.error(
+                            "目前線上的 GAS 仍在執行舊版 Word 轉檔程式。"
+                            "請將最新 GAS.gs 同步至 Apps Script，建立新部署版本，"
+                            "並確認 Streamlit 使用新部署網址。"
+                        )
+                        st.caption(f"Google 回傳訊息：{message}")
+                    elif "DriveApp" in message or "auth/drive" in message:
                         st.error(
                             "GAS 尚未取得 Google Drive 授權。請在 Apps Script "
                             "編輯器執行 authorizeDriveAccess() 並完成授權，"
