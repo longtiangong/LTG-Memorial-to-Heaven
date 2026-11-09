@@ -37,7 +37,7 @@ if st.button("🚀 開始產出 A3 疏文文件"):
                         f"👉 [點此開啟產出的 Google Doc 文件]({result.get('url')})"
                     )
                     st.markdown(
-                        f"👉 [下載 A3 直式橫書 Word 檔]({result['wordDownloadUrl']})"
+                        f"👉 [下載 A3 橫式 Word 檔]({result['wordDownloadUrl']})"
                     )
                 elif result.get("status") == "success":
                     st.error(
