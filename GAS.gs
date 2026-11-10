@@ -195,7 +195,7 @@ function buildWordAddressGroupTable(group, columnWidths) {
     `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:gridSpan w:val="${columnWidths.length}"/>` +
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="30" w:type="dxa"/>' +
-    '<w:bottom w:w="50" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
+    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
     '<w:textDirection w:val="btLr"/><w:vAlign w:val="center"/></w:tcPr>' +
     '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
     `<w:r><w:rPr><w:b/><w:sz w:val="${group.fontSize * 2}"/>` +
@@ -205,30 +205,41 @@ function buildWordAddressGroupTable(group, columnWidths) {
     const cells = member.map((value, index) => {
       const width = columnWidths[index];
       // * 11100911 修正號碼文字顯示為橫向
-      const direction = "btLr";
+      const direction = index < 2 ? "lrTb" : "btLr";
       const keepTogether = index < 2 || index === 4;
       const noWrap = keepTogether ? "<w:noWrap/>" : "";
       const fitText = keepTogether ? "<w:tcFitText/>" : "";
-      const wordWrap = index < 2 ? '<w:wordWrap w:val="0"/>' : "";
-      const topMargin = rowIndex === 0 ? 0 : 50;
-      const bottomMargin = rowIndex === group.members.length - 1 ? 0 : 50;
+      const runDirection = index < 2 ? '<w:vert w:val="vert270"/>' : "";
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
-        `${noWrap}${fitText}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
-        `<w:left w:w="30" w:type="dxa"/><w:bottom w:w="${bottomMargin}" w:type="dxa"/>` +
+        `${noWrap}${fitText}<w:tcMar><w:top w:w="0" w:type="dxa"/>` +
+        '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
         '<w:right w:w="30" w:type="dxa"/></w:tcMar>' +
         `<w:textDirection w:val="${direction}"/><w:vAlign w:val="center"/></w:tcPr>` +
-        `<w:p><w:pPr><w:spacing w:before="0" w:after="0"/>${wordWrap}</w:pPr>` +
-        `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
+        '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
+        `<w:r><w:rPr>${runDirection}<w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
-    return `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
+    const row = `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
+    return rowIndex === 0 ? row : buildWordSpacerRow(columnWidths, 100) + row;
   }).join("");
+  const addressGap = buildWordSpacerRow(columnWidths, 50);
   return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
-    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/>' +
-    '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
-    '<w:right w:w="30" w:type="dxa"/></w:tblCellMar>' +
-    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${addressRow}${memberRows}</w:tbl>`;
+    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
+    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar>' +
+    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${addressRow}${addressGap}${memberRows}</w:tbl>`;
+}
+
+function buildWordSpacerRow(columnWidths, height) {
+  const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
+  const cell =
+    `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
+    `<w:gridSpan w:val="${columnWidths.length}"/>` +
+    '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
+    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
+    '</w:tcPr><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>' +
+    '</w:pPr></w:p></w:tc>';
+  return `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${height}" w:hRule="exact"/></w:trPr>${cell}</w:tr>`;
 }
 
 function escapeXml(value) {
