@@ -105,7 +105,7 @@ function buildWordDocumentXml(groups) {
   const contentWidth = 728.51;
   const pageHeightTwips = 23811;
   const pageMarginTwips = 1134;
-  const centerGapTwips = 397;
+  const centerGapTwips = 1134;
   const halfCapacityTwips = Math.floor(
     (pageHeightTwips - pageMarginTwips * 2 - centerGapTwips) / 2
   );
@@ -174,20 +174,31 @@ function getAddressGroupFontSize(group, pageCapacity, contentWidth) {
 }
 
 function estimateAddressGroupHeight(group, fontSize, contentWidth) {
-  const addressLines = estimateWrappedLines(group.address, contentWidth, fontSize);
-  const fieldWidths = getMemberColumnWidths().map(width => width / 20 - 3);
+  const columnMargins = getMemberColumnMargins();
+  const fieldWidths = getMemberColumnWidths().map((width, index) => {
+    return width / 20 - (columnMargins.left[index] + columnMargins.right[index]) / 20;
+  });
   const rowsHeight = group.members.reduce((total, member, rowIndex) => {
-    const lineCount = Math.max(...member.map((value, index) => {
-      return index < 2 || index === 4
-        ? 1
-        : estimateWrappedLines(value, fieldWidths[index], fontSize);
-    }));
-    const topMargin = rowIndex === 0 ? 0 : 2.5;
-    const bottomMargin = rowIndex === group.members.length - 1 ? 20 : 2.5;
-    return total + lineCount * fontSize * 1.2 + topMargin + bottomMargin;
+    return total + estimateMemberRowHeight(group, member, rowIndex, fieldWidths, fontSize);
   }, 0);
-  return addressLines * fontSize * 1.2 + 20 + rowsHeight;
+  const firstMemberHeight = estimateMemberRowHeight(
+    group, group.members[0], 0, fieldWidths, fontSize
+  );
+  return firstMemberHeight + ADDRESS_MEMBER_GAP_TWIPS / 20 + rowsHeight;
 }
+
+function estimateMemberRowHeight(group, member, rowIndex, fieldWidths, fontSize) {
+  const lineCount = Math.max(...member.map((value, index) => {
+    return index === 4
+      ? 1
+      : estimateWrappedLines(value, fieldWidths[index], fontSize);
+  }));
+  const topMargin = rowIndex === 0 ? 0 : 2.5;
+  const bottomMargin = rowIndex === group.members.length - 1 ? 20 : 2.5;
+  return lineCount * fontSize * 1.2 + topMargin + bottomMargin;
+}
+
+const ADDRESS_MEMBER_GAP_TWIPS = 113;
 
 function estimateWrappedLines(value, width, fontSize) {
   const textWidth = Array.from(value || "").reduce((total, character) => {
@@ -202,11 +213,25 @@ function normalizeAddress(address) {
 
 function getMemberColumnWidths() {
   const totalWidth = 14570;
-  const proportions = [1, 1, 0.75, 1, 2, 0.75, 0.75, 0.75];
+  const proportions = [2.5, 2.5, 2.5, 4, 8.6, 2.5, 2.6, 2.6];
   const totalProportion = proportions.reduce((total, proportion) => total + proportion, 0);
-  const widths = proportions.map(proportion => Math.floor(totalWidth * proportion / totalProportion));
-  widths[widths.length - 1] += totalWidth - widths.reduce((total, width) => total + width, 0);
+  const exactWidths = proportions.map(proportion => totalWidth * proportion / totalProportion);
+  const widths = exactWidths.map(Math.floor);
+  let remainingWidth = totalWidth - widths.reduce((total, width) => total + width, 0);
+  const fractionalOrder = exactWidths
+    .map((width, index) => ({ index, fraction: width - widths[index] }))
+    .sort((left, right) => right.fraction - left.fraction);
+  for (let index = 0; index < remainingWidth; index++) {
+    widths[fractionalOrder[index].index]++;
+  }
   return widths;
+}
+
+function getMemberColumnMargins() {
+  return {
+    left: [0, 0, 0, 0, 0, 0, 0, 0],
+    right: [57, 170, 60, 60, 60, 60, 60, 0],
+  };
 }
 
 // * 11100852 修正住址排和資料排間距
@@ -233,34 +258,65 @@ function buildWordPageTable(page, columnWidths, halfCapacityTwips, centerGapTwip
 
 function buildWordAddressGroupRows(group, columnWidths) {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
+  const addressStartColumn = 2;
+  const addressOffsetWidth = columnWidths
+    .slice(0, addressStartColumn)
+    .reduce((total, width) => total + width, 0);
+  const addressWidth = totalWidth - addressOffsetWidth;
+  const memberCellBorders = [
+    '<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>',
+    '<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>',
+    '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>',
+    '<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>',
+  ].join("");
+  const addressOffsetCell =
+    `<w:tc><w:tcPr><w:tcW w:w="${addressOffsetWidth}" w:type="dxa"/>` +
+    `<w:gridSpan w:val="${addressStartColumn}"/>` +
+    '</w:tcPr><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:tc>';
   const addressCell =
-    `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
-    `<w:gridSpan w:val="${columnWidths.length}"/>` +
-    '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="30" w:type="dxa"/>' +
-    '<w:bottom w:w="400" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
-    '<w:textDirection w:val="btLr"/><w:vAlign w:val="center"/></w:tcPr>' +
-    '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
+    `<w:tc><w:tcPr><w:tcW w:w="${addressWidth}" w:type="dxa"/>` +
+    `<w:gridSpan w:val="${columnWidths.length - addressStartColumn}"/><w:noWrap/><w:tcFitText/>` +
+    '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
+    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
+    '<w:textDirection w:val="lrTb"/><w:vAlign w:val="center"/></w:tcPr>' +
+    '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
     `<w:r><w:rPr><w:b/><w:sz w:val="${group.fontSize * 2}"/>` +
     `</w:rPr><w:t xml:space="preserve">${escapeXml(group.address)}</w:t></w:r></w:p></w:tc>`;
-  const rows = [`<w:tr><w:trPr><w:cantSplit/></w:trPr>${addressCell}</w:tr>`];
+  const columnMargins = getMemberColumnMargins();
+  const fieldWidths = columnWidths.map((width, index) => {
+    return width / 20 - (columnMargins.left[index] + columnMargins.right[index]) / 20;
+  });
+  const addressHeightTwips = Math.ceil(estimateMemberRowHeight(
+    group,
+    group.members[0],
+    0,
+    fieldWidths,
+    group.fontSize
+  ) * 20);
+  const rows = [
+    `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${addressHeightTwips}" w:hRule="exact"/></w:trPr>${addressOffsetCell}${addressCell}</w:tr>`,
+    buildWordSpacerRow(columnWidths, ADDRESS_MEMBER_GAP_TWIPS),
+  ];
   const memberRows = group.members.map((member, rowIndex) => {
     const cells = member.map((value, index) => {
       const width = columnWidths[index];
-      // * 11100911 修正號碼文字顯示為橫向
-      const direction = index < 2 ? "lrTb" : "btLr";
-      const keepTogether = index < 2 || index === 4;
+      const leftMargin = columnMargins.left[index];
+      const rightMargin = columnMargins.right[index];
+      // * 11101500 欄A和欄B的格式要求備註：停用特殊方向、禁止換行、縮放與英數方向控制。
+      const direction = index < 2 ? "" : '<w:textDirection w:val="btLr"/>';
+      const keepTogether = index === 4;
       const noWrap = keepTogether ? "<w:noWrap/>" : "";
       const fitText = keepTogether ? "<w:tcFitText/>" : "";
-      const numberTextDirection = index < 2 ? '<w:vert w:val="vert270"/>' : "";
       const topMargin = rowIndex === 0 ? 0 : 50;
       const bottomMargin = rowIndex === group.members.length - 1 ? 400 : 50;
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
-        `${noWrap}${fitText}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
-        `<w:left w:w="30" w:type="dxa"/><w:bottom w:w="${bottomMargin}" w:type="dxa"/>` +
-        '<w:right w:w="30" w:type="dxa"/></w:tcMar>' +
-        `<w:textDirection w:val="${direction}"/><w:vAlign w:val="center"/></w:tcPr>` +
-        `<w:p><w:pPr><w:spacing w:before="0" w:after="0"/>${noWrap}</w:pPr>` +
-        `<w:r><w:rPr>${numberTextDirection}<w:sz w:val="${group.fontSize * 2}"/>` +
+        `${noWrap}${fitText}<w:tcBorders>${memberCellBorders}</w:tcBorders>` +
+        `<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
+        `<w:left w:w="${leftMargin}" w:type="dxa"/><w:bottom w:w="${bottomMargin}" w:type="dxa"/>` +
+        `<w:right w:w="${rightMargin}" w:type="dxa"/></w:tcMar>` +
+        `${direction}<w:vAlign w:val="center"/></w:tcPr>` +
+        '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
+        `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
     return `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
