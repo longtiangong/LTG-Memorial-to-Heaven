@@ -122,13 +122,9 @@ function buildWordDocumentXml(groups) {
       usedHeight = 0;
     }
 
-    content.push(buildWordTable([[group.address]], [14570], group.fontSize, true, 0));
     const memberWidths = Array(8).fill(Math.floor(14570 / 8));
     memberWidths[7] += 14570 - memberWidths.reduce((total, width) => total + width, 0);
-    // * 11100007 A、B欄光明燈號碼改為橫向，上下間距5 pt
-    group.members.forEach(member => {
-      content.push(buildWordTable([member], memberWidths, group.fontSize, false, 30, true, 50));
-    });
+    content.push(buildWordAddressGroupTable(group, memberWidths));
 
     if (height > pageCapacity) {
       breakBeforeNextGroup = true;
@@ -182,36 +178,47 @@ function normalizeAddress(address) {
   return String(address || "").replace(/[\s\u3000]+/g, "").trim();
 }
 
-function buildWordTable(rows, columnWidths, fontSize, bold, cellMargin, keepLampNumbersInline, verticalCellMargin) {
+// * 11100852 修正住址排和資料排間距
+function buildWordAddressGroupTable(group, columnWidths) {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
     .map(edge => `<w:${edge} w:val="nil"/>`).join("");
   const grid = columnWidths.map(width => `<w:gridCol w:w="${width}"/>`).join("");
-  const tableRows = rows.map(row => {
-    const cells = row.map((value, index) => {
+  const addressCell =
+    `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
+    `<w:gridSpan w:val="${columnWidths.length}"/>` +
+    '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="30" w:type="dxa"/>' +
+    '<w:bottom w:w="50" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
+    '<w:textDirection w:val="btLr"/><w:vAlign w:val="center"/></w:tcPr>' +
+    '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
+    `<w:r><w:rPr><w:b/><w:sz w:val="${group.fontSize * 2}"/>` +
+    `</w:rPr><w:t xml:space="preserve">${escapeXml(group.address)}</w:t></w:r></w:p></w:tc>`;
+  const addressRow = `<w:tr><w:trPr><w:cantSplit/></w:trPr>${addressCell}</w:tr>`;
+  const memberRows = group.members.map((member, rowIndex) => {
+    const cells = member.map((value, index) => {
       const width = columnWidths[index];
-      const boldProperty = bold ? "<w:b/>" : "";
       // * 11100007 A、B欄光明燈號碼橫向且不換行
-      const keepInline = keepLampNumbersInline && index < 2;
+      const keepInline = index < 2;
       const direction = keepInline ? "lrTb" : "btLr";
       const noWrap = keepInline ? "<w:noWrap/>" : "";
+      const topMargin = rowIndex === 0 ? 0 : 50;
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
-        `${noWrap}<w:textDirection w:val="${direction}"/>` +
-        '<w:vAlign w:val="center"/></w:tcPr>' +
+        `${noWrap}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
+        '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="50" w:type="dxa"/>' +
+        '<w:right w:w="30" w:type="dxa"/></w:tcMar>' +
+        `<w:textDirection w:val="${direction}"/><w:vAlign w:val="center"/></w:tcPr>` +
         '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
-        `<w:r><w:rPr>${boldProperty}<w:sz w:val="${fontSize * 2}"/>` +
+        `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
     return `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
   }).join("");
   return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
-    `<w:tblCellMar><w:top w:w="${verticalCellMargin || 0}" w:type="dxa"/>` +
-    `<w:left w:w="${cellMargin}" w:type="dxa"/>` +
-    `<w:bottom w:w="${verticalCellMargin || 0}" w:type="dxa"/>` +
-    `<w:right w:w="${cellMargin}" w:type="dxa"/></w:tblCellMar>` +
-    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>` +
-    `${tableRows}</w:tbl>`;
+    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/>' +
+    '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
+    '<w:right w:w="30" w:type="dxa"/></w:tblCellMar>' +
+    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${addressRow}${memberRows}</w:tbl>`;
 }
 
 function escapeXml(value) {
