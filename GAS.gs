@@ -171,7 +171,9 @@ function buildWordDocumentXml(groups) {
   pages.forEach((currentPage, index) => {
     content.push(buildWordPageTable(currentPage, columnWidths, halfCapacityTwips, centerGapTwips));
     if (index < pages.length - 1) {
-      content.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
+      content.push(
+        '<w:p><w:pPr><w:pageBreakBefore/><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>'
+      );
     }
   });
 
@@ -332,15 +334,13 @@ function buildWordAddressGroupRows(group, columnWidths) {
       const fitText = keepTogether ? "<w:tcFitText/>" : "";
       const topMargin = rowIndex === 0 ? 0 : 50;
       const bottomMargin = rowIndex === group.members.length - 1 ? 400 : 50;
-      const keepNext = rowIndex < group.members.length - 1 || index < member.length - 1;
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
         `${noWrap}${fitText}<w:tcBorders>${memberCellBorders}</w:tcBorders>` +
         `<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
         `<w:left w:w="${leftMargin}" w:type="dxa"/><w:bottom w:w="${bottomMargin}" w:type="dxa"/>` +
         `<w:right w:w="${rightMargin}" w:type="dxa"/></w:tcMar>` +
         `${direction}<w:vAlign w:val="center"/></w:tcPr>` +
-        `<w:p><w:pPr>${keepNext ? "<w:keepNext/>" : ""}` +
-        '<w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
+        '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
         `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
