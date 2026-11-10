@@ -5,11 +5,14 @@ function authorizeDriveAccess() {
 }
 
 function authorizeSpreadsheetAccess() {
-  const sheetId = PropertiesService.getScriptProperties().getProperty("SHEET_500_ID");
-  if (!sheetId) {
+  const properties = PropertiesService.getScriptProperties();
+  const sheetIds = ["SHEET_500_ID", "SHEET_300_ID"]
+    .map(propertyName => properties.getProperty(propertyName))
+    .filter(Boolean);
+  if (sheetIds.length === 0) {
     throw new Error("請先從 Streamlit 呼叫一次產生流程，讓系統記錄試算表 ID。");
   }
-  SpreadsheetApp.openById(sheetId).getName();
+  sheetIds.forEach(sheetId => SpreadsheetApp.openById(sheetId).getName());
 }
 
 function doPost(e) {
@@ -22,12 +25,32 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    const sheetId = contents.sheetId;
-    const docTitle = contents.docTitle || "500元光明燈疏文";
-    PropertiesService.getScriptProperties().setProperty("SHEET_500_ID", sheetId);
-    
+    const lampType = contents.lampType || "500";
+    const lampOptions = {
+      "300": {
+        propertyName: "SHEET_300_ID",
+        sheetName: "300元光明燈",
+        defaultDocTitle: "300元光明燈疏文",
+      },
+      "500": {
+        propertyName: "SHEET_500_ID",
+        sheetName: "500元光明燈",
+        defaultDocTitle: "500元光明燈疏文",
+      },
+    };
+    if (!Object.prototype.hasOwnProperty.call(lampOptions, lampType)) {
+      throw new Error("不支援的光明燈金額");
+    }
+    const lampOption = lampOptions[lampType];
+
+    const sheetId = contents.sheetId ||
+      PropertiesService.getScriptProperties().getProperty(lampOption.propertyName);
+    if (!sheetId) throw new Error(`請設定 ${lampOption.propertyName}`);
+    const docTitle = contents.docTitle || lampOption.defaultDocTitle;
+    PropertiesService.getScriptProperties().setProperty(lampOption.propertyName, sheetId);
+
     // 執行疏文生成
-    const files = generateWordDocument(sheetId, docTitle);
+    const files = generateWordDocument(sheetId, docTitle, lampOption.sheetName);
     
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",
@@ -41,17 +64,17 @@ function doPost(e) {
   }
 }
 
-function generateWordDocument(sheetId, docTitle) {
+function generateWordDocument(sheetId, docTitle, sheetName) {
   const ss = SpreadsheetApp.openById(sheetId);
-  const sheet = ss.getSheetByName("500元光明燈");
-  if (!sheet) throw new Error("找不到『500元光明燈』工作表");
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) throw new Error(`找不到『${sheetName}』工作表`);
 
   const data = sheet.getDataRange().getValues();
   if (data.length < 2) throw new Error("試算表沒有可產生的資料");
 
   data.shift();
   if (sheet.getLastColumn() < 9) {
-    throw new Error("『500元光明燈』工作表至少需要 A 至 I 欄");
+    throw new Error(`『${sheetName}』工作表至少需要 A 至 I 欄`);
   }
 
   const columns = {

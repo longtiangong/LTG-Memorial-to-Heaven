@@ -3,22 +3,30 @@ import streamlit as st
 
 st.set_page_config(page_title="光明燈疏文生成系統", layout="wide")
 
-st.title("🪔 500元光明燈 A3 疏文生成系統")
+st.title("🪔 光明燈 A3 疏文生成系統")
 
 # 讀取 Secrets
-sheet_id = st.secrets.get("SHEET_500_ID", "")
+lamp_type = st.selectbox(
+    "光明燈金額",
+    ["500", "300"],
+    format_func=lambda value: f"{value}元光明燈",
+)
+sheet_id = st.secrets.get(f"SHEET_{lamp_type}_ID", "")
 web_app_url = st.secrets.get("WEB_APP_URL", "")
 gas_api_key = st.secrets.get("GAS_API_KEY", "")
 
-doc_title = st.text_input("輸出的 Word 檔名", value="500元光明燈疏文")
+doc_title = st.text_input("輸出的 Word 檔名", value=f"{lamp_type}元光明燈疏文")
 
-if st.button("🚀 開始產出 A3 疏文文件"):
-    if not web_app_url or not gas_api_key:
+if st.button(f"🚀 開始產出 {lamp_type}元光明燈 A3 疏文文件"):
+    if not sheet_id:
+        st.error(f"請確認 Secrets 中已設定 SHEET_{lamp_type}_ID")
+    elif not web_app_url or not gas_api_key:
         st.error("請確認 Secrets 中已設定 WEB_APP_URL 與 GAS_API_KEY")
     else:
         with st.spinner("正在處理資料並製作 A3 排版文件..."):
             payload = {
                 "apiKey": gas_api_key,
+                "lampType": lamp_type,
                 "sheetId": sheet_id,
                 "docTitle": doc_title,
             }
