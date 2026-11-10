@@ -1,7 +1,25 @@
+import hmac
+
 import requests
 import streamlit as st
 
 st.set_page_config(page_title="光明燈疏文生成系統", layout="wide")
+
+admin_password = st.secrets.get("ADMIN_PASSWORD")
+if not isinstance(admin_password, str) or not admin_password:
+    st.error(
+        "請先在本機 .streamlit/secrets.toml 或正式環境的 Secrets "
+        "設定 ADMIN_PASSWORD。"
+    )
+    st.stop()
+
+entered_password = st.text_input("管理員密碼", type="password")
+if not hmac.compare_digest(
+    entered_password.encode("utf-8"),
+    admin_password.encode("utf-8"),
+):
+    st.error("管理員密碼不正確。")
+    st.stop()
 
 st.title("🪔 光明燈 A3 疏文生成系統")
 

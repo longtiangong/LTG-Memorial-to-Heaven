@@ -132,10 +132,10 @@ function buildWordDocumentXml(groups) {
   const halfCapacityTwips = Math.floor(
     (pageHeightTwips - pageMarginTwips * 2 - centerGapTwips) / 2
   );
-  const regionCapacity = halfCapacityTwips / 20 - 12;
+  const regionCapacity = halfCapacityTwips / 20 - 36;
   const pages = [];
-  let page = { topGroups: [], bottomGroups: [], topHeight: 0, bottomHeight: 0 };
-  let region = "top";
+  let pageGroups = [];
+  let pageHeight = 0;
 
   groups.forEach(group => {
     group.fontSize = getAddressGroupFontSize(group, regionCapacity, contentWidth);
@@ -147,34 +147,35 @@ function buildWordDocumentXml(groups) {
       );
     }
 
-    if (region === "top" && page.topHeight + height <= regionCapacity) {
-      page.topGroups.push(group);
-      page.topHeight += height;
-      return;
+    const nextPageGroups = pageGroups.concat(group);
+    if (
+      pageGroups.length > 0 &&
+      (
+        pageHeight + height > regionCapacity * 2 ||
+        !splitAddressGroupsAcrossPage(nextPageGroups, regionCapacity, contentWidth)
+      )
+    ) {
+      pages.push(splitAddressGroupsAcrossPage(pageGroups, regionCapacity, contentWidth));
+      pageGroups = [];
+      pageHeight = 0;
     }
-
-    region = "bottom";
-    if (page.bottomHeight + height <= regionCapacity) {
-      page.bottomGroups.push(group);
-      page.bottomHeight += height;
-      return;
-    }
-
-    pages.push(page);
-    page = { topGroups: [group], bottomGroups: [], topHeight: height, bottomHeight: 0 };
-    region = "top";
+    pageGroups.push(group);
+    pageHeight += height;
   });
-  pages.push(page);
+  if (pageGroups.length > 0) {
+    pages.push(splitAddressGroupsAcrossPage(pageGroups, regionCapacity, contentWidth));
+  }
 
   const content = [];
   const columnWidths = getMemberColumnWidths();
   pages.forEach((currentPage, index) => {
-    content.push(buildWordPageTable(currentPage, columnWidths, halfCapacityTwips, centerGapTwips));
-    if (index < pages.length - 1) {
-      content.push(
-        '<w:p><w:pPr><w:pageBreakBefore/><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>'
-      );
-    }
+    content.push(buildWordPageTable(
+      currentPage,
+      columnWidths,
+      halfCapacityTwips,
+      centerGapTwips,
+      index > 0
+    ));
   });
 
   const section = [
@@ -186,6 +187,43 @@ function buildWordDocumentXml(groups) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
     `<w:body>${content.join("")}${section}</w:body></w:document>`;
+}
+
+function splitAddressGroupsAcrossPage(groups, regionCapacity, contentWidth) {
+  const heights = groups.map(group => {
+    return estimateAddressGroupHeight(group, group.fontSize, contentWidth);
+  });
+  const totalHeight = heights.reduce((total, height) => total + height, 0);
+  const firstSplit = 1;
+  const lastSplit = Math.max(1, groups.length - 1);
+  let bestSplit = -1;
+  let bestDifference = Infinity;
+  let topHeight = 0;
+
+  for (let split = 0; split <= groups.length; split++) {
+    const bottomHeight = totalHeight - topHeight;
+    if (
+      split >= firstSplit &&
+      split <= lastSplit &&
+      topHeight <= regionCapacity &&
+      bottomHeight <= regionCapacity
+    ) {
+      const difference = Math.abs(topHeight - bottomHeight);
+      if (difference < bestDifference) {
+        bestSplit = split;
+        bestDifference = difference;
+      }
+    }
+    if (split < groups.length) topHeight += heights[split];
+  }
+
+  if (bestSplit < 0) return null;
+  return {
+    topGroups: groups.slice(0, bestSplit),
+    bottomGroups: groups.slice(bestSplit),
+    topHeight: heights.slice(0, bestSplit).reduce((total, height) => total + height, 0),
+    bottomHeight: heights.slice(bestSplit).reduce((total, height) => total + height, 0),
+  };
 }
 
 function getAddressGroupFontSize(group, pageCapacity, contentWidth) {
@@ -220,7 +258,7 @@ function estimateMemberRowHeight(group, member, rowIndex, fieldWidths, fontSize)
   }));
   const topMargin = rowIndex === 0 ? 0 : 2.5;
   const bottomMargin = rowIndex === group.members.length - 1 ? 20 : 2.5;
-  return lineCount * fontSize * 1.2 + topMargin + bottomMargin;
+  return lineCount * fontSize * 1.2 + topMargin + bottomMargin + 1;
 }
 
 const ADDRESS_MEMBER_GAP_TWIPS = 113;
@@ -260,19 +298,41 @@ function getMemberColumnMargins() {
 }
 
 // * 11100852 修正住址排和資料排間距
-function buildWordPageTable(page, columnWidths, halfCapacityTwips, centerGapTwips) {
+function buildWordPageTable(
+  page,
+  columnWidths,
+  halfCapacityTwips,
+  centerGapTwips,
+  startOnNewPage
+) {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
     .map(edge => `<w:${edge} w:val="nil"/>`).join("");
   const grid = columnWidths.map(width => `<w:gridCol w:w="${width}"/>`).join("");
   const rows = [
-    ...page.topGroups.flatMap(group => buildWordAddressGroupRows(group, columnWidths)),
+    ...page.topGroups.flatMap((group, index) => {
+      return buildWordAddressGroupRows(
+        group,
+        columnWidths,
+        startOnNewPage && index === 0,
+        true
+      );
+    }),
     buildWordSpacerRow(
       columnWidths,
-      Math.max(20, halfCapacityTwips - Math.round(page.topHeight * 20))
+      Math.max(20, halfCapacityTwips - Math.round(page.topHeight * 20)),
+      "",
+      true
     ),
     ...buildWordCenterGapRows(columnWidths, centerGapTwips),
-    ...page.bottomGroups.flatMap(group => buildWordAddressGroupRows(group, columnWidths)),
+    ...page.bottomGroups.flatMap((group, index) => {
+      return buildWordAddressGroupRows(
+        group,
+        columnWidths,
+        false,
+        index < page.bottomGroups.length - 1
+      );
+    }),
   ].join("");
   return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
@@ -281,7 +341,12 @@ function buildWordPageTable(page, columnWidths, halfCapacityTwips, centerGapTwip
     `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`;
 }
 
-function buildWordAddressGroupRows(group, columnWidths) {
+function buildWordAddressGroupRows(
+  group,
+  columnWidths,
+  startOnNewPage = false,
+  keepFollowing = false
+) {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const addressStartColumn = 2;
   const addressOffsetWidth = columnWidths
@@ -304,7 +369,8 @@ function buildWordAddressGroupRows(group, columnWidths) {
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
     '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
     '<w:textDirection w:val="lrTb"/><w:vAlign w:val="center"/></w:tcPr>' +
-    '<w:p><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
+    `<w:p><w:pPr>${startOnNewPage ? "<w:pageBreakBefore/>" : ""}` +
+    '<w:keepNext/><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
     `<w:r><w:rPr><w:b/><w:sz w:val="${group.fontSize * 2}"/>` +
     `</w:rPr><w:t xml:space="preserve">${escapeXml(group.address)}</w:t></w:r></w:p></w:tc>`;
   const columnMargins = getMemberColumnMargins();
@@ -334,17 +400,28 @@ function buildWordAddressGroupRows(group, columnWidths) {
       const fitText = keepTogether ? "<w:tcFitText/>" : "";
       const topMargin = rowIndex === 0 ? 0 : 50;
       const bottomMargin = rowIndex === group.members.length - 1 ? 400 : 50;
+      const keepNext = rowIndex < group.members.length - 1 ||
+        index < member.length - 1 ||
+        (keepFollowing && rowIndex === group.members.length - 1 && index === member.length - 1);
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
         `${noWrap}${fitText}<w:tcBorders>${memberCellBorders}</w:tcBorders>` +
         `<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
         `<w:left w:w="${leftMargin}" w:type="dxa"/><w:bottom w:w="${bottomMargin}" w:type="dxa"/>` +
         `<w:right w:w="${rightMargin}" w:type="dxa"/></w:tcMar>` +
         `${direction}<w:vAlign w:val="center"/></w:tcPr>` +
-        '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
+        `<w:p><w:pPr>${keepNext ? "<w:keepNext/>" : ""}` +
+        '<w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
         `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
-    return `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
+    const rowHeightTwips = Math.ceil(estimateMemberRowHeight(
+      group,
+      member,
+      rowIndex,
+      fieldWidths,
+      group.fontSize
+    ) * 20);
+    return `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${rowHeightTwips}" w:hRule="exact"/></w:trPr>${cells}</w:tr>`;
   }).join("");
   rows.push(memberRows);
   return rows;
@@ -354,8 +431,8 @@ function buildWordCenterGapRows(columnWidths, heightTwips) {
   const firstHalfHeight = Math.floor(heightTwips / 2);
   const secondHalfHeight = heightTwips - firstHalfHeight;
   return [
-    buildWordSpacerRow(columnWidths, firstHalfHeight, "", false, true),
-    buildWordSpacerRow(columnWidths, secondHalfHeight),
+    buildWordSpacerRow(columnWidths, firstHalfHeight, "", true, true),
+    buildWordSpacerRow(columnWidths, secondHalfHeight, "", true),
   ];
 }
 
@@ -370,11 +447,11 @@ function buildWordSpacerRow(
   const cell =
     `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:gridSpan w:val="${columnWidths.length}"/>` +
+    `${dashedLine ? '<w:tcBorders><w:bottom w:val="dashed" w:sz="6" w:space="0" w:color="000000"/></w:tcBorders>' : ""}` +
     `${cellBorders}` +
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
     '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
     `</w:tcPr><w:p><w:pPr>${keepNext ? "<w:keepNext/>" : ""}` +
-    `${dashedLine ? '<w:pBdr><w:bottom w:val="dashed" w:sz="6" w:space="0" w:color="000000"/></w:pBdr>' : ""}` +
     `<w:spacing w:before="0" w:after="0" w:line="${dashedLine ? heightTwips : 20}" w:lineRule="exact"/>` +
     '</w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r></w:p></w:tc>';
   return `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${heightTwips}" w:hRule="exact"/></w:trPr>${cell}</w:tr>`;
