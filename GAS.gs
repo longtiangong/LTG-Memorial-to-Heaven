@@ -105,7 +105,7 @@ function buildWordDocumentXml(groups) {
   const contentWidth = 728.51;
   const pageHeightTwips = 23811;
   const pageMarginTwips = 1134;
-  const centerGapTwips = 1134;
+  const centerGapTwips = 850;
   const halfCapacityTwips = Math.floor(
     (pageHeightTwips - pageMarginTwips * 2 - centerGapTwips) / 2
   );
@@ -246,7 +246,7 @@ function buildWordPageTable(page, columnWidths, halfCapacityTwips, centerGapTwip
       columnWidths,
       Math.max(20, halfCapacityTwips - Math.round(page.topHeight * 20))
     ),
-    buildWordSpacerRow(columnWidths, centerGapTwips),
+    ...buildWordCenterGapRows(columnWidths, centerGapTwips),
     ...page.bottomGroups.flatMap(group => buildWordAddressGroupRows(group, columnWidths)),
   ].join("");
   return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
@@ -325,11 +325,23 @@ function buildWordAddressGroupRows(group, columnWidths) {
   return rows;
 }
 
-function buildWordSpacerRow(columnWidths, heightTwips) {
+function buildWordCenterGapRows(columnWidths, heightTwips) {
+  const firstHalfHeight = Math.floor(heightTwips / 2);
+  const secondHalfHeight = heightTwips - firstHalfHeight;
+  const dashedCenterBorder =
+    '<w:tcBorders><w:bottom w:val="dashed" w:sz="6" w:space="0" w:color="000000"/></w:tcBorders>';
+  return [
+    buildWordSpacerRow(columnWidths, firstHalfHeight, dashedCenterBorder),
+    buildWordSpacerRow(columnWidths, secondHalfHeight),
+  ];
+}
+
+function buildWordSpacerRow(columnWidths, heightTwips, cellBorders = "") {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const cell =
     `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:gridSpan w:val="${columnWidths.length}"/>` +
+    `${cellBorders}` +
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
     '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
     '</w:tcPr><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>' +
