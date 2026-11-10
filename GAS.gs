@@ -295,14 +295,14 @@ function buildWordAddressGroupRows(group, columnWidths) {
   const addressOffsetCell =
     `<w:tc><w:tcPr><w:tcW w:w="${addressOffsetWidth}" w:type="dxa"/>` +
     `<w:gridSpan w:val="${addressStartColumn}"/>` +
-    '</w:tcPr><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:tc>';
+    '</w:tcPr><w:p><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:tc>';
   const addressCell =
     `<w:tc><w:tcPr><w:tcW w:w="${addressWidth}" w:type="dxa"/>` +
     `<w:gridSpan w:val="${columnWidths.length - addressStartColumn}"/><w:noWrap/><w:tcFitText/>` +
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
     '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
     '<w:textDirection w:val="lrTb"/><w:vAlign w:val="center"/></w:tcPr>' +
-    '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
+    '<w:p><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
     `<w:r><w:rPr><w:b/><w:sz w:val="${group.fontSize * 2}"/>` +
     `</w:rPr><w:t xml:space="preserve">${escapeXml(group.address)}</w:t></w:r></w:p></w:tc>`;
   const columnMargins = getMemberColumnMargins();
@@ -318,7 +318,7 @@ function buildWordAddressGroupRows(group, columnWidths) {
   ) * 20);
   const rows = [
     `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${addressHeightTwips}" w:hRule="exact"/></w:trPr>${addressOffsetCell}${addressCell}</w:tr>`,
-    buildWordSpacerRow(columnWidths, ADDRESS_MEMBER_GAP_TWIPS),
+    buildWordSpacerRow(columnWidths, ADDRESS_MEMBER_GAP_TWIPS, "", true),
   ];
   const memberRows = group.members.map((member, rowIndex) => {
     const cells = member.map((value, index) => {
@@ -332,13 +332,15 @@ function buildWordAddressGroupRows(group, columnWidths) {
       const fitText = keepTogether ? "<w:tcFitText/>" : "";
       const topMargin = rowIndex === 0 ? 0 : 50;
       const bottomMargin = rowIndex === group.members.length - 1 ? 400 : 50;
+      const keepNext = rowIndex < group.members.length - 1 || index < member.length - 1;
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
         `${noWrap}${fitText}<w:tcBorders>${memberCellBorders}</w:tcBorders>` +
         `<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
         `<w:left w:w="${leftMargin}" w:type="dxa"/><w:bottom w:w="${bottomMargin}" w:type="dxa"/>` +
         `<w:right w:w="${rightMargin}" w:type="dxa"/></w:tcMar>` +
         `${direction}<w:vAlign w:val="center"/></w:tcPr>` +
-        '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
+        `<w:p><w:pPr>${keepNext ? "<w:keepNext/>" : ""}` +
+        '<w:spacing w:before="0" w:after="0"/><w:jc w:val="left"/></w:pPr>' +
         `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
@@ -351,15 +353,19 @@ function buildWordAddressGroupRows(group, columnWidths) {
 function buildWordCenterGapRows(columnWidths, heightTwips) {
   const firstHalfHeight = Math.floor(heightTwips / 2);
   const secondHalfHeight = heightTwips - firstHalfHeight;
-  const dashedCenterBorder =
-    '<w:tcBorders><w:bottom w:val="dashed" w:sz="6" w:space="0" w:color="000000"/></w:tcBorders>';
   return [
-    buildWordSpacerRow(columnWidths, firstHalfHeight, dashedCenterBorder),
+    buildWordSpacerRow(columnWidths, firstHalfHeight, "", false, true),
     buildWordSpacerRow(columnWidths, secondHalfHeight),
   ];
 }
 
-function buildWordSpacerRow(columnWidths, heightTwips, cellBorders = "") {
+function buildWordSpacerRow(
+  columnWidths,
+  heightTwips,
+  cellBorders = "",
+  keepNext = false,
+  dashedLine = false
+) {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const cell =
     `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
@@ -367,7 +373,9 @@ function buildWordSpacerRow(columnWidths, heightTwips, cellBorders = "") {
     `${cellBorders}` +
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
     '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
-    '</w:tcPr><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>' +
+    `</w:tcPr><w:p><w:pPr>${keepNext ? "<w:keepNext/>" : ""}` +
+    `${dashedLine ? '<w:pBdr><w:bottom w:val="dashed" w:sz="6" w:space="0" w:color="000000"/></w:pBdr>' : ""}` +
+    `<w:spacing w:before="0" w:after="0" w:line="${dashedLine ? heightTwips : 20}" w:lineRule="exact"/>` +
     '</w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r></w:p></w:tc>';
   return `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${heightTwips}" w:hRule="exact"/></w:trPr>${cell}</w:tr>`;
 }
