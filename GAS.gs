@@ -198,11 +198,12 @@ function buildWordAddressGroupTable(group, columnWidths) {
     const cells = member.map((value, index) => {
       const width = columnWidths[index];
       // * 11100911 修正號碼文字顯示為橫向
-      const direction = index < 2 ? "tbRl" : "btLr";
+      const direction = "btLr";
       const noWrap = index < 2 ? "<w:noWrap/>" : "";
+      const fitText = index < 2 ? "<w:tcFitText/>" : "";
       const topMargin = rowIndex === 0 ? 0 : 50;
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
-        `${noWrap}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
+        `${noWrap}${fitText}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
         '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="50" w:type="dxa"/>' +
         '<w:right w:w="30" w:type="dxa"/></w:tcMar>' +
         `<w:textDirection w:val="${direction}"/><w:vAlign w:val="center"/></w:tcPr>` +
