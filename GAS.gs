@@ -162,7 +162,7 @@ function getAddressGroupFontSize(group, pageCapacity, contentWidth) {
 
 function estimateAddressGroupHeight(group, fontSize, contentWidth) {
   const addressLines = estimateWrappedLines(group.address, contentWidth, fontSize);
-  const fieldWidth = contentWidth / 8 - 3;
+  const fieldWidth = contentWidth / 8;
   const rowsHeight = group.members.reduce((total, member, rowIndex) => {
     const lineCount = Math.max(...member.map((value, index) => {
       return index < 2 || index === 4 ? 1 : estimateWrappedLines(value, fieldWidth, fontSize);
@@ -212,8 +212,8 @@ function buildWordAddressGroupTable(group, columnWidths) {
       const runDirection = index < 2 ? '<w:vert w:val="vert270"/>' : "";
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
         `${noWrap}${fitText}<w:tcMar><w:top w:w="0" w:type="dxa"/>` +
-        '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
-        '<w:right w:w="30" w:type="dxa"/></w:tcMar>' +
+        '<w:left w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
+        '<w:right w:w="0" w:type="dxa"/></w:tcMar>' +
         `<w:textDirection w:val="${direction}"/><w:vAlign w:val="center"/></w:tcPr>` +
         '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
         `<w:r><w:rPr>${runDirection}<w:sz w:val="${group.fontSize * 2}"/>` +
