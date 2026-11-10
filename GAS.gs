@@ -102,40 +102,59 @@ function generateWordDocument(sheetId, docTitle) {
 }
 
 function buildWordDocumentXml(groups) {
-  const pageCapacity = 1077.17;
   const contentWidth = 728.51;
-  let usedHeight = 0;
-  let breakBeforeNextGroup = false;
-  const content = [];
+  const pageHeightTwips = 23811;
+  const pageMarginTwips = 1134;
+  const centerGapTwips = 397;
+  const halfCapacityTwips = Math.floor(
+    (pageHeightTwips - pageMarginTwips * 2 - centerGapTwips) / 2
+  );
+  const regionCapacity = halfCapacityTwips / 20 - 12;
+  const pages = [];
+  let page = { topGroups: [], bottomGroups: [], topHeight: 0, bottomHeight: 0 };
+  let region = "top";
 
   groups.forEach(group => {
-    if (breakBeforeNextGroup) {
-      content.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
-      usedHeight = 0;
-      breakBeforeNextGroup = false;
-    }
-
-    group.fontSize = getAddressGroupFontSize(group, pageCapacity, contentWidth);
+    group.fontSize = getAddressGroupFontSize(group, regionCapacity, contentWidth);
     const height = estimateAddressGroupHeight(group, group.fontSize, contentWidth);
-    if (usedHeight > 0 && (height > pageCapacity || usedHeight + height > pageCapacity)) {
-      content.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
-      usedHeight = 0;
+    if (height > regionCapacity) {
+      throw new Error(
+        `地址「${group.address}」的 ${group.members.length} 筆資料無法在 A3 中央留白區一側完整排入，` +
+        "請減少同址資料或調整版面後再產生。"
+      );
     }
 
-    const memberWidths = Array(8).fill(Math.floor(14570 / 8));
-    memberWidths[7] += 14570 - memberWidths.reduce((total, width) => total + width, 0);
-    content.push(buildWordAddressGroupTable(group, memberWidths));
+    if (region === "top" && page.topHeight + height <= regionCapacity) {
+      page.topGroups.push(group);
+      page.topHeight += height;
+      return;
+    }
 
-    if (height > pageCapacity) {
-      breakBeforeNextGroup = true;
-    } else {
-      usedHeight += height;
+    region = "bottom";
+    if (page.bottomHeight + height <= regionCapacity) {
+      page.bottomGroups.push(group);
+      page.bottomHeight += height;
+      return;
+    }
+
+    pages.push(page);
+    page = { topGroups: [group], bottomGroups: [], topHeight: height, bottomHeight: 0 };
+    region = "top";
+  });
+  pages.push(page);
+
+  const content = [];
+  const columnWidths = getMemberColumnWidths();
+  pages.forEach((currentPage, index) => {
+    content.push(buildWordPageTable(currentPage, columnWidths, halfCapacityTwips, centerGapTwips));
+    if (index < pages.length - 1) {
+      content.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
     }
   });
 
   const section = [
     '<w:sectPr>',
-    '<w:pgSz w:w="16838" w:h="23811"/>',
+    `<w:pgSz w:w="16838" w:h="${pageHeightTwips}"/>`,
     '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="0" w:footer="0" w:gutter="0"/>',
     '</w:sectPr>',
   ].join("");
@@ -156,15 +175,18 @@ function getAddressGroupFontSize(group, pageCapacity, contentWidth) {
 
 function estimateAddressGroupHeight(group, fontSize, contentWidth) {
   const addressLines = estimateWrappedLines(group.address, contentWidth, fontSize);
-  const fieldWidth = contentWidth / 8 - 3;
-  const rowsHeight = group.members.reduce((total, member) => {
-    const lineCount = Math.max(
-      ...member.map(value => estimateWrappedLines(value, fieldWidth, fontSize))
-    );
-    // * 11100007 每筆資料列上下間距合計5 pt
-    return total + lineCount * fontSize * 1.2 + 5;
+  const fieldWidths = getMemberColumnWidths().map(width => width / 20 - 3);
+  const rowsHeight = group.members.reduce((total, member, rowIndex) => {
+    const lineCount = Math.max(...member.map((value, index) => {
+      return index < 2 || index === 4
+        ? 1
+        : estimateWrappedLines(value, fieldWidths[index], fontSize);
+    }));
+    const topMargin = rowIndex === 0 ? 0 : 2.5;
+    const bottomMargin = rowIndex === group.members.length - 1 ? 20 : 2.5;
+    return total + lineCount * fontSize * 1.2 + topMargin + bottomMargin;
   }, 0);
-  return addressLines * fontSize * 1.2 + rowsHeight;
+  return addressLines * fontSize * 1.2 + 20 + rowsHeight;
 }
 
 function estimateWrappedLines(value, width, fontSize) {
@@ -178,46 +200,85 @@ function normalizeAddress(address) {
   return String(address || "").replace(/[\s\u3000]+/g, "").trim();
 }
 
+function getMemberColumnWidths() {
+  const totalWidth = 14570;
+  const proportions = [1, 1, 0.75, 1, 2, 0.75, 0.75, 0.75];
+  const totalProportion = proportions.reduce((total, proportion) => total + proportion, 0);
+  const widths = proportions.map(proportion => Math.floor(totalWidth * proportion / totalProportion));
+  widths[widths.length - 1] += totalWidth - widths.reduce((total, width) => total + width, 0);
+  return widths;
+}
+
 // * 11100852 修正住址排和資料排間距
-function buildWordAddressGroupTable(group, columnWidths) {
+function buildWordPageTable(page, columnWidths, halfCapacityTwips, centerGapTwips) {
   const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const borders = ["top", "left", "bottom", "right", "insideH", "insideV"]
     .map(edge => `<w:${edge} w:val="nil"/>`).join("");
   const grid = columnWidths.map(width => `<w:gridCol w:w="${width}"/>`).join("");
+  const rows = [
+    ...page.topGroups.flatMap(group => buildWordAddressGroupRows(group, columnWidths)),
+    buildWordSpacerRow(
+      columnWidths,
+      Math.max(20, halfCapacityTwips - Math.round(page.topHeight * 20))
+    ),
+    buildWordSpacerRow(columnWidths, centerGapTwips),
+    ...page.bottomGroups.flatMap(group => buildWordAddressGroupRows(group, columnWidths)),
+  ].join("");
+  return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
+    `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
+    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
+    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar>' +
+    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`;
+}
+
+function buildWordAddressGroupRows(group, columnWidths) {
+  const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
   const addressCell =
     `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:gridSpan w:val="${columnWidths.length}"/>` +
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="30" w:type="dxa"/>' +
-    '<w:bottom w:w="50" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
+    '<w:bottom w:w="400" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
     '<w:textDirection w:val="btLr"/><w:vAlign w:val="center"/></w:tcPr>' +
     '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
     `<w:r><w:rPr><w:b/><w:sz w:val="${group.fontSize * 2}"/>` +
     `</w:rPr><w:t xml:space="preserve">${escapeXml(group.address)}</w:t></w:r></w:p></w:tc>`;
-  const addressRow = `<w:tr><w:trPr><w:cantSplit/></w:trPr>${addressCell}</w:tr>`;
+  const rows = [`<w:tr><w:trPr><w:cantSplit/></w:trPr>${addressCell}</w:tr>`];
   const memberRows = group.members.map((member, rowIndex) => {
     const cells = member.map((value, index) => {
       const width = columnWidths[index];
       // * 11100911 修正號碼文字顯示為橫向
-      const direction = "btLr";
-      const noWrap = index < 2 ? "<w:noWrap/>" : "";
+      const direction = index < 2 ? "lrTb" : "btLr";
+      const keepTogether = index < 2 || index === 4;
+      const noWrap = keepTogether ? "<w:noWrap/>" : "";
+      const fitText = keepTogether ? "<w:tcFitText/>" : "";
+      const numberTextDirection = index < 2 ? '<w:vert w:val="vert270"/>' : "";
       const topMargin = rowIndex === 0 ? 0 : 50;
+      const bottomMargin = rowIndex === group.members.length - 1 ? 400 : 50;
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
-        `${noWrap}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
-        '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="50" w:type="dxa"/>' +
+        `${noWrap}${fitText}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
+        `<w:left w:w="30" w:type="dxa"/><w:bottom w:w="${bottomMargin}" w:type="dxa"/>` +
         '<w:right w:w="30" w:type="dxa"/></w:tcMar>' +
         `<w:textDirection w:val="${direction}"/><w:vAlign w:val="center"/></w:tcPr>` +
-        '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
-        `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
+        `<w:p><w:pPr><w:spacing w:before="0" w:after="0"/>${noWrap}</w:pPr>` +
+        `<w:r><w:rPr>${numberTextDirection}<w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
     return `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
   }).join("");
-  return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
-    `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
-    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/>' +
-    '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
-    '<w:right w:w="30" w:type="dxa"/></w:tblCellMar>' +
-    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${addressRow}${memberRows}</w:tbl>`;
+  rows.push(memberRows);
+  return rows;
+}
+
+function buildWordSpacerRow(columnWidths, heightTwips) {
+  const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
+  const cell =
+    `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
+    `<w:gridSpan w:val="${columnWidths.length}"/>` +
+    '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
+    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
+    '</w:tcPr><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>' +
+    '</w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r></w:p></w:tc>';
+  return `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${heightTwips}" w:hRule="exact"/></w:trPr>${cell}</w:tr>`;
 }
 
 function escapeXml(value) {
