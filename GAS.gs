@@ -117,15 +117,9 @@ function buildWordDocumentXml(groups) {
 
     group.fontSize = getAddressGroupFontSize(group, pageCapacity, contentWidth);
     const height = estimateAddressGroupHeight(group, group.fontSize, contentWidth);
-    const groupGap = usedHeight > 0 ? 2.5 : 0;
-    if (usedHeight > 0 && (height > pageCapacity || usedHeight + groupGap + height > pageCapacity)) {
+    if (usedHeight > 0 && (height > pageCapacity || usedHeight + height > pageCapacity)) {
       content.push('<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
       usedHeight = 0;
-    } else if (groupGap > 0) {
-      content.push(
-        '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="50" w:lineRule="exact"/>' +
-        '</w:pPr><w:r><w:rPr><w:sz w:val="2"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r></w:p>'
-      );
     }
 
     const memberWidths = Array(8).fill(Math.floor(14570 / 8));
@@ -135,7 +129,7 @@ function buildWordDocumentXml(groups) {
     if (height > pageCapacity) {
       breakBeforeNextGroup = true;
     } else {
-      usedHeight += height + (usedHeight > 0 ? groupGap : 0);
+      usedHeight += height;
     }
   });
 
@@ -162,16 +156,15 @@ function getAddressGroupFontSize(group, pageCapacity, contentWidth) {
 
 function estimateAddressGroupHeight(group, fontSize, contentWidth) {
   const addressLines = estimateWrappedLines(group.address, contentWidth, fontSize);
-  const fieldWidth = contentWidth / 8;
-  const rowsHeight = group.members.reduce((total, member, rowIndex) => {
-    const lineCount = Math.max(...member.map((value, index) => {
-      return index < 2 || index === 4 ? 1 : estimateWrappedLines(value, fieldWidth, fontSize);
-    }));
-    const topGap = rowIndex === 0 ? 0 : 2.5;
-    const bottomGap = rowIndex === group.members.length - 1 ? 0 : 2.5;
-    return total + lineCount * fontSize * 1.2 + topGap + bottomGap;
+  const fieldWidth = contentWidth / 8 - 3;
+  const rowsHeight = group.members.reduce((total, member) => {
+    const lineCount = Math.max(
+      ...member.map(value => estimateWrappedLines(value, fieldWidth, fontSize))
+    );
+    // * 11100007 每筆資料列上下間距合計5 pt
+    return total + lineCount * fontSize * 1.2 + 5;
   }, 0);
-  return addressLines * fontSize * 1.2 + 2.5 + rowsHeight;
+  return addressLines * fontSize * 1.2 + rowsHeight;
 }
 
 function estimateWrappedLines(value, width, fontSize) {
@@ -195,7 +188,7 @@ function buildWordAddressGroupTable(group, columnWidths) {
     `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:gridSpan w:val="${columnWidths.length}"/>` +
     '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="30" w:type="dxa"/>' +
-    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
+    '<w:bottom w:w="50" w:type="dxa"/><w:right w:w="30" w:type="dxa"/></w:tcMar>' +
     '<w:textDirection w:val="btLr"/><w:vAlign w:val="center"/></w:tcPr>' +
     '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
     `<w:r><w:rPr><w:b/><w:sz w:val="${group.fontSize * 2}"/>` +
@@ -205,41 +198,26 @@ function buildWordAddressGroupTable(group, columnWidths) {
     const cells = member.map((value, index) => {
       const width = columnWidths[index];
       // * 11100911 修正號碼文字顯示為橫向
-      const direction = index < 2 ? "lrTb" : "btLr";
-      const keepTogether = index < 2 || index === 4;
-      const noWrap = keepTogether ? "<w:noWrap/>" : "";
-      const fitText = keepTogether ? "<w:tcFitText/>" : "";
-      const runDirection = index < 2 ? '<w:vert w:val="vert270"/>' : "";
+      const direction = "btLr";
+      const noWrap = index < 2 ? "<w:noWrap/>" : "";
+      const topMargin = rowIndex === 0 ? 0 : 50;
       return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>` +
-        `${noWrap}${fitText}<w:tcMar><w:top w:w="0" w:type="dxa"/>` +
-        '<w:left w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
-        '<w:right w:w="0" w:type="dxa"/></w:tcMar>' +
+        `${noWrap}<w:tcMar><w:top w:w="${topMargin}" w:type="dxa"/>` +
+        '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="50" w:type="dxa"/>' +
+        '<w:right w:w="30" w:type="dxa"/></w:tcMar>' +
         `<w:textDirection w:val="${direction}"/><w:vAlign w:val="center"/></w:tcPr>` +
         '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>' +
-        `<w:r><w:rPr>${runDirection}<w:sz w:val="${group.fontSize * 2}"/>` +
+        `<w:r><w:rPr><w:sz w:val="${group.fontSize * 2}"/>` +
         `</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
     }).join("");
-    const row = `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
-    return rowIndex === 0 ? row : buildWordSpacerRow(columnWidths, 100) + row;
+    return `<w:tr><w:trPr><w:cantSplit/></w:trPr>${cells}</w:tr>`;
   }).join("");
-  const addressGap = buildWordSpacerRow(columnWidths, 50);
   return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>` +
     `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
-    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
-    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar>' +
-    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${addressRow}${addressGap}${memberRows}</w:tbl>`;
-}
-
-function buildWordSpacerRow(columnWidths, height) {
-  const totalWidth = columnWidths.reduce((total, width) => total + width, 0);
-  const cell =
-    `<w:tc><w:tcPr><w:tcW w:w="${totalWidth}" w:type="dxa"/>` +
-    `<w:gridSpan w:val="${columnWidths.length}"/>` +
-    '<w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>' +
-    '<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>' +
-    '</w:tcPr><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/>' +
-    '</w:pPr></w:p></w:tc>';
-  return `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${height}" w:hRule="exact"/></w:trPr>${cell}</w:tr>`;
+    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/>' +
+    '<w:left w:w="30" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/>' +
+    '<w:right w:w="30" w:type="dxa"/></w:tblCellMar>' +
+    `</w:tblPr><w:tblGrid>${grid}</w:tblGrid>${addressRow}${memberRows}</w:tbl>`;
 }
 
 function escapeXml(value) {
