@@ -132,7 +132,7 @@ function buildWordDocumentXml(groups) {
   const halfCapacityTwips = Math.floor(
     (pageHeightTwips - pageMarginTwips * 2 - centerGapTwips) / 2
   );
-  const regionCapacity = halfCapacityTwips / 20 - 36;
+  const regionCapacity = halfCapacityTwips / 20 - 100;
   const pages = [];
   let pageGroups = [];
   let pageHeight = 0;
