@@ -58,6 +58,7 @@ def speak_audio(text):
     )
 
 
+# * 11111641 即時自動掃描，45 秒內未辨識成功，會語音提示
 class LiveOCRProcessor(VideoProcessorBase):
     def __init__(self):
         self.results = queue.Queue()
@@ -80,6 +81,10 @@ class LiveOCRProcessor(VideoProcessorBase):
                 lang="chi_tra+eng",
                 config="--psm 6",
             ).strip()
+        except pytesseract.TesseractNotFoundError:
+            self.results.put(("error", "伺服器找不到 Tesseract OCR，請檢查安裝設定。"))
+            self.result_sent = True
+            return frame
         except pytesseract.TesseractError as error:
             self.results.put(("error", f"OCR 辨識失敗：{error}"))
             self.result_sent = True
@@ -158,80 +163,98 @@ if "scan_result" not in st.session_state:
     st.session_state["scan_result"] = None
 if "scan_id" not in st.session_state:
     st.session_state["scan_id"] = 0
+if "scan_started_at" not in st.session_state:
+    st.session_state["scan_started_at"] = time.monotonic()
+if "scan_timeout_count" not in st.session_state:
+    st.session_state["scan_timeout_count"] = 0
 
 scan_result = st.session_state["scan_result"]
-if scan_result is None:
-    if "scan_started_at" not in st.session_state:
-        st.session_state["scan_started_at"] = time.monotonic()
+
+
+@st.fragment(run_every=0.25)
+def live_scan_fragment():
     st.info("請允許瀏覽器使用相機，並將燈殼文字對準鏡頭。45 秒內未辨識成功會提示重掃。")
+    if st.session_state["scan_timeout_count"]:
+        st.warning("上次掃描逾時，請調整燈殼位置；系統正在繼續掃描。")
     scan_status = st.empty()
-    scan_progress = st.progress(0)
+    elapsed = time.monotonic() - st.session_state["scan_started_at"]
+    scan_progress = st.progress(min(int(elapsed / 45 * 100), 100))
     scan_context = webrtc_streamer(
         key=f"lamp-live-scan-{st.session_state['scan_id']}",
         mode=WebRtcMode.SENDONLY,
         video_processor_factory=LiveOCRProcessor,
         media_stream_constraints={"video": True, "audio": False},
+        video_html_attrs={
+            "autoPlay": True,
+            "controls": False,
+            "playsInline": True,
+            "muted": True,
+            "style": {
+                "width": "100%",
+                "maxHeight": "480px",
+                "objectFit": "contain",
+                "backgroundColor": "#111",
+            },
+        },
         desired_playing_state=True,
         async_processing=True,
     )
 
     processor = scan_context.video_processor if scan_context.state.playing else None
-    deadline = st.session_state["scan_started_at"] + 45
-    while time.monotonic() < deadline:
-        elapsed = 45 - max(0, deadline - time.monotonic())
-        scan_progress.progress(min(int(elapsed / 45 * 100), 100))
-        if processor is None and scan_context.state.playing:
-            processor = scan_context.video_processor
-        if processor is None:
-            scan_status.info("等待相機啟動...")
-            time.sleep(0.25)
-            continue
-
-        scan_status.info("正在掃描燈號、姓名及燈名...")
+    if processor is None:
+        scan_status.info("等待相機啟動，請確認瀏覽器已允許相機權限...")
+    else:
+        scan_status.info("即時影像已連線，正在辨識燈號、姓名及燈名...")
         try:
-            event, value = processor.results.get(timeout=0.25)
+            event, value = processor.results.get_nowait()
         except queue.Empty:
-            continue
+            event = ""
+            value = ""
 
         if event == "error":
             st.session_state["scan_result"] = {
                 "status": "error",
                 "message": value,
             }
-            break
-
-        scan_status.info("掃描成功，確認中...")
-        speak_audio("掃描成功，確認中")
-        result = call_gas_api(
-            {
-                "action": "scan_verify",
-                "apiKey": api_key,
-                "sheetIds": sheet_ids,
-                "scannedText": value,
-            },
-            timeout=15,
-        )
-        st.session_state["scan_result"] = result
-        if result.get("status") == "success":
-            speak_audio(
-                f"上架成功，{result['sheetName']}，"
-                f"第{result['lampIndex']}組，號碼"
-                f"{result['number']}，燈名{result['lightType']}"
+            st.rerun(scope="app")
+        elif event == "text":
+            scan_status.info("掃描成功，確認中...")
+            speak_audio("掃描成功，確認中")
+            result = call_gas_api(
+                {
+                    "action": "scan_verify",
+                    "apiKey": api_key,
+                    "sheetIds": sheet_ids,
+                    "scannedText": value,
+                },
+                timeout=15,
             )
-        elif result.get("status") == "error":
-            speak_audio("連線核對失敗，請重新掃描")
-        else:
-            errors = "、".join(result.get("errors", ["資料"]))
-            speak_audio(f"上架失敗，不符合項目為{errors}，掃描失敗，再重掃")
-        break
+            st.session_state["scan_result"] = result
+            if result.get("status") == "success":
+                speak_audio(
+                    f"上架成功，{result['sheetName']}，"
+                    f"第{result['lampIndex']}組，號碼"
+                    f"{result['number']}，燈名{result['lightType']}"
+                )
+            elif result.get("status") == "error":
+                speak_audio("連線核對失敗，請重新掃描")
+            else:
+                errors = "、".join(result.get("errors", ["資料"]))
+                speak_audio(f"上架失敗，不符合項目為{errors}，掃描失敗，再重掃")
+            st.rerun(scope="app")
 
-    if st.session_state["scan_result"] is None:
-        st.session_state["scan_result"] = {
-            "status": "timeout",
-            "message": "45 秒內未能辨識燈殼文字，請重新掃描。",
-        }
+    elapsed = time.monotonic() - st.session_state["scan_started_at"]
+    scan_progress.progress(min(int(elapsed / 45 * 100), 100))
+    if elapsed >= 45:
+        st.session_state["scan_timeout_count"] += 1
+        st.session_state["scan_started_at"] = time.monotonic()
+        st.session_state["scan_id"] += 1
         speak_audio("掃描失敗，再重掃")
-    st.rerun()
+        st.rerun(scope="fragment")
+
+
+if scan_result is None:
+    live_scan_fragment()
 else:
     st.session_state.pop("scan_started_at", None)
     if scan_result.get("status") == "success":
