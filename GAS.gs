@@ -247,7 +247,8 @@ function estimateAddressGroupHeight(group, fontSize, contentWidth) {
   const firstMemberHeight = estimateMemberRowHeight(
     group, group.members[0], 0, fieldWidths, fontSize
   );
-  return firstMemberHeight + ADDRESS_MEMBER_GAP_TWIPS / 20 + rowsHeight;
+  return firstMemberHeight + ADDRESS_MEMBER_GAP_TWIPS / 20 + rowsHeight +
+    ADDRESS_GROUP_TRAILING_GAP_TWIPS / 20;
 }
 
 function estimateMemberRowHeight(group, member, rowIndex, fieldWidths, fontSize) {
@@ -257,11 +258,12 @@ function estimateMemberRowHeight(group, member, rowIndex, fieldWidths, fontSize)
       : estimateWrappedLines(value, fieldWidths[index], fontSize);
   }));
   const topMargin = rowIndex === 0 ? 0 : 2.5;
-  const bottomMargin = rowIndex === group.members.length - 1 ? 20 : 2.5;
+  const bottomMargin = 2.5;
   return lineCount * fontSize * 1.2 + topMargin + bottomMargin + 1;
 }
 
 const ADDRESS_MEMBER_GAP_TWIPS = 113;
+const ADDRESS_GROUP_TRAILING_GAP_TWIPS = 350;
 
 function estimateWrappedLines(value, width, fontSize) {
   const textWidth = Array.from(value || "").reduce((total, character) => {
@@ -399,7 +401,7 @@ function buildWordAddressGroupRows(
       const noWrap = keepTogether ? "<w:noWrap/>" : "";
       const fitText = keepTogether ? "<w:tcFitText/>" : "";
       const topMargin = rowIndex === 0 ? 0 : 50;
-      const bottomMargin = rowIndex === group.members.length - 1 ? 400 : 50;
+      const bottomMargin = 50;
       const keepNext = rowIndex < group.members.length - 1 ||
         index < member.length - 1 ||
         (keepFollowing && rowIndex === group.members.length - 1 && index === member.length - 1);
@@ -424,6 +426,12 @@ function buildWordAddressGroupRows(
     return `<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="${rowHeightTwips}" w:hRule="exact"/></w:trPr>${cells}</w:tr>`;
   }).join("");
   rows.push(memberRows);
+  rows.push(buildWordSpacerRow(
+    columnWidths,
+    ADDRESS_GROUP_TRAILING_GAP_TWIPS,
+    "",
+    keepFollowing
+  ));
   return rows;
 }
 
