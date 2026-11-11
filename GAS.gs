@@ -47,10 +47,12 @@ function doPost(e) {
       PropertiesService.getScriptProperties().getProperty(lampOption.propertyName);
     if (!sheetId) throw new Error(`請設定 ${lampOption.propertyName}`);
     const docTitle = contents.docTitle || lampOption.defaultDocTitle;
+    const wordFolderId = contents.wordFolderId;
+    if (!wordFolderId) throw new Error("請設定 WORD_FOLDER_ID");
     PropertiesService.getScriptProperties().setProperty(lampOption.propertyName, sheetId);
 
     // 執行疏文生成
-    const files = generateWordDocument(sheetId, docTitle, lampOption.sheetName);
+    const files = generateWordDocument(sheetId, docTitle, lampOption.sheetName, wordFolderId);
     
     return ContentService.createTextOutput(JSON.stringify({
       status: "success",
@@ -64,7 +66,7 @@ function doPost(e) {
   }
 }
 
-function generateWordDocument(sheetId, docTitle, sheetName) {
+function generateWordDocument(sheetId, docTitle, sheetName, wordFolderId) {
   const ss = SpreadsheetApp.openById(sheetId);
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) throw new Error(`找不到『${sheetName}』工作表`);
@@ -117,7 +119,7 @@ function generateWordDocument(sheetId, docTitle, sheetName) {
   });
   if (groups.length === 0) throw new Error("找不到可產生的光明燈資料");
 
-  const wordFile = createA3PortraitWordFile(groups, docTitle);
+  const wordFile = createA3PortraitWordFile(groups, docTitle, wordFolderId);
   return {
     wordUrl: wordFile.getUrl(),
     wordDownloadUrl: `https://drive.google.com/uc?export=download&id=${wordFile.getId()}`,
@@ -480,7 +482,7 @@ function getCellText(value, timezone, datePattern) {
 }
 
 // * 11092304 Word 文字270 度旋轉，A3直向
-function createA3PortraitWordFile(groups, docTitle) {
+function createA3PortraitWordFile(groups, docTitle, wordFolderId) {
   const files = [
     Utilities.newBlob(
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -504,5 +506,5 @@ function createA3PortraitWordFile(groups, docTitle) {
   ];
   const docxBlob = Utilities.zip(files, `${docTitle}_A3直式.docx`)
     .setContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-  return DriveApp.createFile(docxBlob);
+  return DriveApp.getFolderById(wordFolderId).createFile(docxBlob);
 }

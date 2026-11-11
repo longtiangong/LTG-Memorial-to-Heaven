@@ -32,6 +32,7 @@ lamp_type = st.selectbox(
 sheet_id = st.secrets.get(f"SHEET_{lamp_type}_ID", "")
 web_app_url = st.secrets.get("WEB_APP_URL", "")
 gas_api_key = st.secrets.get("GAS_API_KEY", "")
+word_folder_id = st.secrets.get("WORD_FOLDER_ID", "")
 
 doc_title = st.text_input("輸出的 Word 檔名", value=f"{lamp_type}元光明燈疏文")
 
@@ -40,6 +41,8 @@ if st.button(f"🚀 開始產出 {lamp_type}元光明燈 A3 疏文文件"):
         st.error(f"請確認 Secrets 中已設定 SHEET_{lamp_type}_ID")
     elif not web_app_url or not gas_api_key:
         st.error("請確認 Secrets 中已設定 WEB_APP_URL 與 GAS_API_KEY")
+    elif not word_folder_id:
+        st.error("請確認 Secrets 中已設定 WORD_FOLDER_ID")
     else:
         with st.spinner("正在處理資料並製作 A3 排版文件..."):
             payload = {
@@ -47,6 +50,7 @@ if st.button(f"🚀 開始產出 {lamp_type}元光明燈 A3 疏文文件"):
                 "lampType": lamp_type,
                 "sheetId": sheet_id,
                 "docTitle": doc_title,
+                "wordFolderId": word_folder_id,
             }
 
             try:
