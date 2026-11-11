@@ -2,3 +2,4 @@ streamlit
 requests
 Pillow
 pytesseract
+streamlit-webrtc

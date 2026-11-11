@@ -1,10 +1,12 @@
-import hashlib
 import json
+import queue
+import time
 
 import pytesseract
 import requests
 import streamlit as st
 from PIL import Image
+from streamlit_webrtc import VideoProcessorBase, WebRtcMode, webrtc_streamer
 
 # 頁面以手機直向操作為主，使用置中版面與大尺寸表單控制項。
 st.set_page_config(
@@ -49,7 +51,6 @@ def speak_audio(text):
         const utterance = new SpeechSynthesisUtterance({safe_text});
         utterance.lang = "zh-TW";
         utterance.rate = 1;
-        window.speechSynthesis.cancel();
         window.speechSynthesis.speak(utterance);
         </script>
         """,
@@ -57,13 +58,57 @@ def speak_audio(text):
     )
 
 
+class LiveOCRProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.results = queue.Queue()
+        self.last_ocr_at = 0.0
+        self.previous_text = ""
+        self.stable_frames = 0
+        self.result_sent = False
+
+    def recv(self, frame):
+        now = time.monotonic()
+        if self.result_sent or now - self.last_ocr_at < 1:
+            return frame
+        self.last_ocr_at = now
+
+        try:
+            image = Image.fromarray(frame.to_ndarray(format="rgb24")).convert("L")
+            image.thumbnail((1800, 1800))
+            text = pytesseract.image_to_string(
+                image,
+                lang="chi_tra+eng",
+                config="--psm 6",
+            ).strip()
+        except pytesseract.TesseractError as error:
+            self.results.put(("error", f"OCR 辨識失敗：{error}"))
+            self.result_sent = True
+            return frame
+
+        normalized_text = "".join(text.split())
+        if len(normalized_text) < 3:
+            self.previous_text = ""
+            self.stable_frames = 0
+            return frame
+        if normalized_text == self.previous_text:
+            self.stable_frames += 1
+        else:
+            self.previous_text = normalized_text
+            self.stable_frames = 1
+
+        if self.stable_frames >= 2:
+            self.results.put(("text", text))
+            self.result_sent = True
+        return frame
+
+
 # GAS 共用既有 Web App 與 API 金鑰，回傳明確錯誤供畫面顯示。
-def call_gas_api(payload):
+def call_gas_api(payload, timeout=60):
     try:
         response = requests.post(
             st.secrets["WEB_APP_URL"],
             json=payload,
-            timeout=60,
+            timeout=timeout,
         )
         response.raise_for_status()
         result = response.json()
@@ -107,68 +152,88 @@ sheet_ids = {
 api_key = st.secrets["GAS_API_KEY"]
 
 st.title("🏮 光明燈上架確認")
-st.caption("拍攝燈殼後，系統會自動比對 300 元及 500 元工作表並記錄上架結果。")
+st.caption("對準燈殼開始即時掃描，系統會自動比對 300 元及 500 元工作表。")
 
-# * 11111615 拍照後，系統直接拿 OCR 文字比對與 300／500 元工作表
-camera_image = st.camera_input("拍攝燈殼上的號碼、姓名及燈名")
-if camera_image is None:
-    st.session_state["scan_image_digest"] = None
-    st.session_state["scan_result"] = {}
-else:
-    try:
-        # 灰階及縮圖降低 OCR 處理負擔。
-        image = Image.open(camera_image).convert("L")
-        image.thumbnail((1800, 1800))
-        image_digest = hashlib.sha256(camera_image.getvalue()).hexdigest()
-        is_new_image = st.session_state.get("scan_image_digest") != image_digest
-        if is_new_image:
-            st.session_state["scan_image_digest"] = image_digest
-            st.session_state["scan_result"] = {}
+if "scan_result" not in st.session_state:
+    st.session_state["scan_result"] = None
+if "scan_id" not in st.session_state:
+    st.session_state["scan_id"] = 0
 
-        scanned_text = pytesseract.image_to_string(
-            image,
-            lang="chi_tra+eng",
-            config="--psm 6",
-        ).strip()
-        if scanned_text:
-            st.info(f"**OCR 掃描文字：**\n\n{scanned_text}")
-            if is_new_image:
-                with st.spinner("正在自動核對掃描文字與兩份工作表..."):
-                    result = call_gas_api(
-                        {
-                            "action": "scan_verify",
-                            "apiKey": api_key,
-                            "sheetIds": sheet_ids,
-                            "scannedText": scanned_text,
-                        }
-                    )
-                st.session_state["scan_result"] = result
-                if result.get("status") == "success":
-                    speak_audio("上架成功")
-                elif result.get("status") == "fail":
-                    errors = "、".join(result.get("errors", ["資料"]))
-                    speak_audio(f"上架失敗，不符合項目為{errors}，請重新掃描")
-                elif result.get("status") == "ambiguous":
-                    speak_audio("找到多筆相同姓名，無法判定，請重新掃描")
-                elif result.get("status") == "not_found":
-                    speak_audio("掃描文字未找到相符姓名或資料，請重新掃描")
+scan_result = st.session_state["scan_result"]
+if scan_result is None:
+    if "scan_started_at" not in st.session_state:
+        st.session_state["scan_started_at"] = time.monotonic()
+    st.info("請允許瀏覽器使用相機，並將燈殼文字對準鏡頭。45 秒內未辨識成功會提示重掃。")
+    scan_status = st.empty()
+    scan_progress = st.progress(0)
+    scan_context = webrtc_streamer(
+        key=f"lamp-live-scan-{st.session_state['scan_id']}",
+        mode=WebRtcMode.SENDONLY,
+        video_processor_factory=LiveOCRProcessor,
+        media_stream_constraints={"video": True, "audio": False},
+        desired_playing_state=True,
+        async_processing=True,
+    )
+
+    processor = scan_context.video_processor if scan_context.state.playing else None
+    deadline = st.session_state["scan_started_at"] + 45
+    while time.monotonic() < deadline:
+        elapsed = 45 - max(0, deadline - time.monotonic())
+        scan_progress.progress(min(int(elapsed / 45 * 100), 100))
+        if processor is None and scan_context.state.playing:
+            processor = scan_context.video_processor
+        if processor is None:
+            scan_status.info("等待相機啟動...")
+            time.sleep(0.25)
+            continue
+
+        scan_status.info("正在掃描燈號、姓名及燈名...")
+        try:
+            event, value = processor.results.get(timeout=0.25)
+        except queue.Empty:
+            continue
+
+        if event == "error":
+            st.session_state["scan_result"] = {
+                "status": "error",
+                "message": value,
+            }
+            break
+
+        scan_status.info("掃描成功，確認中...")
+        speak_audio("掃描成功，確認中")
+        result = call_gas_api(
+            {
+                "action": "scan_verify",
+                "apiKey": api_key,
+                "sheetIds": sheet_ids,
+                "scannedText": value,
+            },
+            timeout=15,
+        )
+        st.session_state["scan_result"] = result
+        if result.get("status") == "success":
+            speak_audio(
+                f"上架成功，{result['sheetName']}，"
+                f"第{result['lampIndex']}組，號碼"
+                f"{result['number']}，燈名{result['lightType']}"
+            )
+        elif result.get("status") == "error":
+            speak_audio("連線核對失敗，請重新掃描")
         else:
-            st.warning("未辨識到文字，請調整拍攝角度或光線後重新掃描。")
-            if is_new_image:
-                st.session_state["scan_result"] = {
-                    "status": "not_found",
-                    "message": "沒有辨識到文字，請重新拍攝。",
-                }
-                speak_audio("未辨識到文字，請重新拍攝")
-    except pytesseract.TesseractNotFoundError:
-        st.error("伺服器找不到 Tesseract OCR，請確認 packages.txt 已安裝 OCR 套件。")
-    except pytesseract.TesseractError as error:
-        st.error(f"OCR 辨識失敗：{error}")
-    except OSError as error:
-        st.error(f"無法讀取拍攝的圖片：{error}")
+            errors = "、".join(result.get("errors", ["資料"]))
+            speak_audio(f"上架失敗，不符合項目為{errors}，掃描失敗，再重掃")
+        break
 
-if camera_image is not None and st.session_state.get("scan_image_digest"):
-    scan_result = st.session_state.get("scan_result", {})
+    if st.session_state["scan_result"] is None:
+        st.session_state["scan_result"] = {
+            "status": "timeout",
+            "message": "45 秒內未能辨識燈殼文字，請重新掃描。",
+        }
+        speak_audio("掃描失敗，再重掃")
+    st.rerun()
+else:
+    st.session_state.pop("scan_started_at", None)
     if scan_result.get("status") == "success":
         st.markdown(
             '<div class="status-card" style="background:#d9ead3;color:#274e13">'
@@ -176,9 +241,13 @@ if camera_image is not None and st.session_state.get("scan_image_digest"):
             unsafe_allow_html=True,
         )
         st.success(
-            f"掃描內容符合「{scan_result['sheetName']}」"
-            f"第 {scan_result['rowNumber']} 列，已自動記錄綠燈。"
+            f"符合「{scan_result['sheetName']}」："
+            f"第 {scan_result['lampIndex']} 組，號碼 "
+            f"{scan_result['number']}，燈名「{scan_result['lightType']}」；"
+            f"已在第 {scan_result['rowNumber']} 列記錄綠燈。"
         )
+    elif scan_result.get("status") == "timeout":
+        st.warning(scan_result["message"])
     elif scan_result.get("status") in ("fail", "not_found", "ambiguous"):
         errors = scan_result.get("errors", [])
         if errors:
@@ -197,6 +266,12 @@ if camera_image is not None and st.session_state.get("scan_image_digest"):
             )
     elif scan_result.get("status") == "error":
         st.error(scan_result.get("message", "無法查詢工作表，請檢查 GAS 設定。"))
+
+    if st.button("🔄 重新掃描", key="restart_live_scan"):
+        st.session_state["scan_result"] = None
+        st.session_state["scan_id"] += 1
+        st.session_state["scan_started_at"] = time.monotonic()
+        st.rerun()
 
 st.divider()
 # 比對成功時保存的資料快照；新增或異動欄位會以紅燈提示重新掃描。

@@ -110,7 +110,7 @@ function verifyScannedLamp(contents) {
     };
   }
 
-  const candidates = [];
+  const nameCandidates = [];
   getLampSheets(contents.sheetIds).forEach(target => {
     const lastRow = target.sheet.getLastRow();
     if (lastRow < 2) return;
@@ -119,99 +119,130 @@ function verifyScannedLamp(contents) {
       const name = normalizeCheckValue(row[4]);
       const normalizedName = normalizeScannedText(name);
       if (normalizedName.length < 2 || !scannedText.includes(normalizedName)) return;
-      const numberMatches = [row[0], row[1]].some(value => {
-        const number = normalizeScannedText(value);
-        return number && scannedText.includes(number);
-      });
-      candidates.push({ target, rowNumber: index + 2, row, name, numberMatches });
+      nameCandidates.push({ target, rowNumber: index + 2, row, name });
     });
   });
 
-  if (candidates.length === 0) {
+  if (nameCandidates.length === 0) {
     return {
       status: "not_found",
-      errors: ["姓名"],
-      message: "辨識文字中找不到符合的姓名，請重新拍攝。",
+      errors: ["姓名", "號碼"],
+      message: "辨識文字中找不到符合的姓名及燈號，請重新拍攝。",
     };
   }
-  let match = candidates[0];
-  if (candidates.length > 1) {
-    const numberMatchedCandidates = candidates.filter(candidate => candidate.numberMatches);
-    if (numberMatchedCandidates.length === 1) {
-      match = numberMatchedCandidates[0];
+
+  const numberCandidates = [];
+  nameCandidates.forEach(candidate => {
+    [candidate.row[0], candidate.row[1]].forEach((value, pairIndex) => {
+      const number = normalizeScannedText(value);
+      if (number && scannedText.includes(number)) {
+        numberCandidates.push({ ...candidate, pairIndex });
+      }
+    });
+  });
+  if (numberCandidates.length > 1) {
+    return {
+      status: "ambiguous",
+      message: "掃描到多個可能的燈號，請一次只拍攝一個燈號、姓名及燈名。",
+    };
+  }
+  let match;
+  if (numberCandidates.length === 1) {
+    match = numberCandidates[0];
+  } else if (nameCandidates.length === 1) {
+    const candidate = nameCandidates[0];
+    const scannedTypes = [candidate.row[7], candidate.row[8]]
+      .map(normalizeScannedText);
+    const matchingTypeIndexes = scannedTypes
+      .map((type, index) => type && scannedText.includes(type) ? index : -1)
+      .filter(index => index >= 0);
+    if (matchingTypeIndexes.length === 1) {
+      match = { ...candidate, pairIndex: matchingTypeIndexes[0] };
     } else {
       return {
-        status: "ambiguous",
-        message: "同名資料需要掃描到唯一燈號才能判定，請重新拍攝清楚的燈號。",
+        status: "fail",
+        errors: ["號碼"],
+        message: "找到姓名，但未能以燈號唯一定位，請重新拍攝清楚的燈號。",
+        sheetName: candidate.target.sheetName,
+        rowNumber: candidate.rowNumber,
+        name: candidate.name,
       };
     }
+  } else {
+    return {
+      status: "ambiguous",
+      errors: ["號碼"],
+      message: "同名資料需要掃描到唯一燈號才能判定，請重新拍攝清楚的燈號。",
+    };
   }
+
   const row = match.row;
+  const numberColumn = match.pairIndex;
+  const typeColumn = numberColumn === 0 ? 7 : 8;
+  const number = normalizeCheckValue(row[numberColumn]);
+  const lightType = normalizeCheckValue(row[typeColumn]);
+  const name = normalizeCheckValue(row[4]);
   const scannedHas = value => {
     const normalized = normalizeScannedText(value);
-    return !normalized || scannedText.includes(normalized);
+    return Boolean(normalized) && scannedText.includes(normalized);
   };
-  const number1Matches =
-    Boolean(normalizeCheckValue(row[0])) && scannedHas(row[0]);
-  const nameMatches =
-    Boolean(normalizeCheckValue(row[4])) && scannedHas(row[4]);
-  const number2Matches = scannedHas(row[1]);
-  const lightType1Matches =
-    Boolean(normalizeCheckValue(row[7])) && scannedHas(row[7]);
-  const lightType2Matches = scannedHas(row[8]);
-  const checks = [
-    number1Matches && nameMatches,
-    number2Matches,
-    lightType1Matches,
-    lightType2Matches,
-  ];
-  const errors = [];
-  if (!number1Matches || !number2Matches) errors.push("號碼");
-  if (!nameMatches) errors.push("姓名");
-  if (!lightType1Matches || !lightType2Matches) errors.push("燈名");
+  const numberMatches = scannedHas(number);
+  const nameMatches = scannedHas(name);
+  const lightTypeMatches = scannedHas(lightType);
+  const numberStatusColumn = numberColumn === 0 ? 10 : 11;
+  const typeStatusColumn = numberColumn === 0 ? 12 : 13;
 
-  const auditColumn = getPlacementAuditColumns(match.target.sheet);
   match.target.sheet
-    .getRange(match.rowNumber, 10, 1, 4)
-    .setValues([checks.map(isMatch => isMatch ? "🟢" : "🟡")])
-    .setBackgrounds([checks.map(isMatch => isMatch ? "#d9ead3" : "#ffe599")])
+    .getRange(match.rowNumber, numberStatusColumn)
+    .setValue(numberMatches && nameMatches ? "🟢" : "🟡")
+    .setBackground(numberMatches && nameMatches ? "#d9ead3" : "#ffe599")
+    .setHorizontalAlignment("CENTER");
+  match.target.sheet
+    .getRange(match.rowNumber, typeStatusColumn)
+    .setValue(lightTypeMatches ? "🟢" : "🟡")
+    .setBackground(lightTypeMatches ? "#d9ead3" : "#ffe599")
     .setHorizontalAlignment("CENTER");
 
+  const errors = [];
+  if (!numberMatches) errors.push("號碼");
+  if (!nameMatches) errors.push("姓名");
+  if (!lightTypeMatches) errors.push("燈名");
   if (errors.length > 0) {
     return {
       status: "fail",
-      errors: Array.from(new Set(errors)),
+      errors,
       sheetName: match.target.sheetName,
       rowNumber: match.rowNumber,
-      name: match.name,
+      name,
+      lampIndex: numberColumn + 1,
     };
   }
 
+  const auditColumn = getPlacementAuditColumns(match.target.sheet);
   const snapshot = [
-    JSON.stringify([normalizeCheckValue(row[0]), normalizeCheckValue(row[4])]),
-    normalizeCheckValue(row[1]),
-    normalizeCheckValue(row[7]),
-    normalizeCheckValue(row[8]),
+    JSON.stringify([number, name, lightType]),
     new Date(),
   ];
   match.target.sheet
-    .getRange(match.rowNumber, auditColumn, 1, snapshot.length)
+    .getRange(match.rowNumber, auditColumn + match.pairIndex * 2, 1, snapshot.length)
     .setValues([snapshot]);
   return {
     status: "success",
     sheetName: match.target.sheetName,
     rowNumber: match.rowNumber,
-    name: match.name,
+    name,
+    lampIndex: numberColumn + 1,
+    number,
+    lightType,
   };
 }
 
 function getPlacementAuditColumns(sheet) {
   const headers = [
-    "_上架確認_號碼姓名",
-    "_上架確認_號碼2",
-    "_上架確認_燈名1",
-    "_上架確認_燈名2",
-    "_上架確認_時間",
+    "_上架確認_燈1資料",
+    "_上架確認_燈1時間",
+    "_上架確認_燈2資料",
+    "_上架確認_燈2時間",
   ];
   const lastColumn = Math.max(sheet.getLastColumn(), 1);
   const existingHeaders = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
@@ -252,28 +283,44 @@ function checkLampUpdates(contents) {
 
     const rowCount = lastRow - 1;
     const data = sheet.getRange(2, 1, rowCount, 9).getDisplayValues();
-    const auditData = sheet.getRange(2, auditColumn, rowCount, 5).getValues();
+    const auditData = sheet.getRange(2, auditColumn, rowCount, 4).getValues();
     const statusRange = sheet.getRange(2, 10, rowCount, 4);
     const statusesByRow = statusRange.getDisplayValues();
     data.forEach((row, index) => {
       if (row.every(value => !normalizeCheckValue(value))) return;
       const current = [
-        JSON.stringify([normalizeCheckValue(row[0]), normalizeCheckValue(row[4])]),
-        normalizeCheckValue(row[1]),
-        normalizeCheckValue(row[7]),
-        normalizeCheckValue(row[8]),
+        JSON.stringify([
+          normalizeCheckValue(row[0]),
+          normalizeCheckValue(row[4]),
+          normalizeCheckValue(row[7]),
+        ]),
+        JSON.stringify([
+          normalizeCheckValue(row[1]),
+          normalizeCheckValue(row[4]),
+          normalizeCheckValue(row[8]),
+        ]),
       ];
       const previous = auditData[index];
-      const isUnverified = !previous[4];
-      const changed = isUnverified
-        ? [true, true, true, true]
-        : current.map((value, fieldIndex) => value !== normalizeCheckValue(previous[fieldIndex]));
+      const pairIsConfigured = [
+        Boolean(normalizeCheckValue(row[0]) || normalizeCheckValue(row[7])),
+        Boolean(normalizeCheckValue(row[1]) || normalizeCheckValue(row[8])),
+      ];
+      const changed = current.map((value, pairIndex) =>
+        pairIsConfigured[pairIndex] &&
+        (
+          !previous[pairIndex * 2 + 1] ||
+          value !== normalizeCheckValue(previous[pairIndex * 2])
+        )
+      );
       if (!changed.some(Boolean)) return;
 
-      changed.forEach((isChanged, fieldIndex) => {
-        if (isChanged && statusesByRow[index][fieldIndex] !== "🟡") {
-          statusesByRow[index][fieldIndex] = "🔴";
-        }
+      changed.forEach((isChanged, pairIndex) => {
+        const statusColumns = pairIndex === 0 ? [0, 2] : [1, 3];
+        statusColumns.forEach(statusIndex => {
+          if (isChanged && statusesByRow[index][statusIndex] !== "🟡") {
+            statusesByRow[index][statusIndex] = "🔴";
+          }
+        });
       });
       changedRows += 1;
     });
