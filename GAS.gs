@@ -20,9 +20,16 @@ function doPost(e) {
     const contents = JSON.parse(e.postData.contents);
     
     // 驗證 API Key
-    if (contents.apiKey !== API_KEY) {
+    if (typeof API_KEY !== "string" || !API_KEY || contents.apiKey !== API_KEY) {
       return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "Unauthorized: Invalid API Key" }))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (contents.action === "verify") {
+      return createJsonResponse(verifyLampPlacement(contents));
+    }
+    if (contents.action === "check_updates") {
+      return createJsonResponse(checkLampUpdates(contents));
     }
     
     const lampType = contents.lampType || "500";
@@ -64,6 +71,227 @@ function doPost(e) {
     return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+function createJsonResponse(result) {
+  return ContentService.createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getLampSheets(sheetIds) {
+  if (!sheetIds || !sheetIds["300"] || !sheetIds["500"]) {
+    throw new Error("請確認 Secrets 已設定 SHEET_300_ID 與 SHEET_500_ID");
+  }
+  return ["300", "500"].map(tier => {
+    const sheetName = `${tier}元光明燈`;
+    const sheet = SpreadsheetApp.openById(sheetIds[tier]).getSheetByName(sheetName);
+    if (!sheet) throw new Error(`找不到「${sheetName}」工作表`);
+    return { tier, sheetName, sheet };
+  });
+}
+
+function normalizeCheckValue(value) {
+  return String(value == null ? "" : value).trim();
+}
+
+function getPlacementAuditColumns(sheet) {
+  const headers = [
+    "_上架確認_號碼姓名",
+    "_上架確認_號碼2",
+    "_上架確認_燈名1",
+    "_上架確認_燈名2",
+    "_上架確認_時間",
+  ];
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const existingHeaders = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+  const positions = headers.map(header => existingHeaders.indexOf(header) + 1);
+  const isContiguous = positions.every((column, index) =>
+    column > 0 && (index === 0 || column === positions[0] + index)
+  );
+  const startColumn = isContiguous
+    ? positions[0]
+    : Math.max(14, lastColumn + 1);
+
+  if (!isContiguous) {
+    sheet.getRange(1, startColumn, 1, headers.length).setValues([headers]);
+    sheet.hideColumns(startColumn, headers.length);
+  }
+  const statusHeaders = [
+    "確認光明燈1號碼及姓名",
+    "確認光明燈2號碼",
+    "確認光明燈1種類",
+    "確認光明燈2種類",
+  ];
+  statusHeaders.forEach((header, index) => {
+    const cell = sheet.getRange(1, 10 + index);
+    if (!cell.getDisplayValue()) cell.setValue(header);
+  });
+  return startColumn;
+}
+
+function getPlacementCandidate(sheets, number1, name, number2) {
+  const candidates = [];
+  sheets.forEach(target => {
+    const lastRow = target.sheet.getLastRow();
+    if (lastRow < 2) return;
+    const rows = target.sheet.getRange(2, 1, lastRow - 1, 9).getDisplayValues();
+    rows.forEach((row, index) => {
+      const rowNumber1 = normalizeCheckValue(row[0]);
+      const rowNumber2 = normalizeCheckValue(row[1]);
+      const rowName = normalizeCheckValue(row[4]);
+      if (
+        (number1 && rowNumber1 === number1) ||
+        (name && rowName === name) ||
+        (number2 && rowNumber2 === number2)
+      ) {
+        const score =
+          (number1 && rowNumber1 === number1 ? 4 : 0) +
+          (name && rowName === name ? 4 : 0) +
+          (number2 && rowNumber2 === number2 ? 2 : 0);
+        candidates.push({
+          target,
+          rowNumber: index + 2,
+          row,
+          score,
+        });
+      }
+    });
+  });
+  if (candidates.length === 0) return null;
+
+  const highestScore = candidates.reduce(
+    (highest, candidate) => Math.max(highest, candidate.score),
+    -Infinity
+  );
+  const bestCandidates = candidates.filter(candidate => candidate.score === highestScore);
+  return bestCandidates.length === 1 ? bestCandidates[0] : null;
+}
+
+function verifyLampPlacement(contents) {
+  const number1 = normalizeCheckValue(contents.number1 || contents.number);
+  const number2 = normalizeCheckValue(contents.number2);
+  const name = normalizeCheckValue(contents.name);
+  const lightType1 = normalizeCheckValue(contents.light_type1 || contents.light_type);
+  const lightType2 = normalizeCheckValue(contents.light_type2);
+  const sheets = getLampSheets(contents.sheetIds);
+  const candidate = getPlacementCandidate(sheets, number1, name, number2);
+  if (!candidate) {
+    return {
+      status: "fail",
+      errors: ["號碼", "姓名"],
+      message: "找不到唯一符合的資料列，請確認號碼及姓名",
+    };
+  }
+
+  const row = candidate.row;
+  const number1Matches = Boolean(number1) && normalizeCheckValue(row[0]) === number1;
+  const nameMatches = Boolean(name) && normalizeCheckValue(row[4]) === name;
+  const number2Matches = normalizeCheckValue(row[1]) === number2;
+  const lightType1Matches =
+    Boolean(lightType1) && normalizeCheckValue(row[7]) === lightType1;
+  const lightType2Matches = normalizeCheckValue(row[8]) === lightType2;
+  const checks = [
+    number1Matches && nameMatches,
+    number2Matches,
+    lightType1Matches,
+    lightType2Matches,
+  ];
+  const auditColumn = getPlacementAuditColumns(candidate.target.sheet);
+  const errors = [];
+  if (!number1Matches) errors.push("號碼");
+  if (!nameMatches) errors.push("姓名");
+  if (!number2Matches) errors.push("號碼2");
+  if (!lightType1Matches) errors.push("燈名");
+  if (!lightType2Matches) errors.push("燈名2");
+
+  const statuses = checks.map(matches => matches ? "🟢" : "🟡");
+  candidate.target.sheet
+    .getRange(candidate.rowNumber, 10, 1, 4)
+    .setValues([statuses])
+    .setBackgrounds([checks.map(matches => matches ? "#d9ead3" : "#ffe599")])
+    .setHorizontalAlignment("CENTER");
+
+  if (errors.length > 0) {
+    return {
+      status: "fail",
+      errors,
+      sheetName: candidate.target.sheetName,
+      rowNumber: candidate.rowNumber,
+    };
+  }
+
+  const snapshot = [
+    JSON.stringify([normalizeCheckValue(row[0]), normalizeCheckValue(row[4])]),
+    normalizeCheckValue(row[1]),
+    normalizeCheckValue(row[7]),
+    normalizeCheckValue(row[8]),
+    new Date(),
+  ];
+  candidate.target.sheet
+    .getRange(candidate.rowNumber, auditColumn, 1, snapshot.length)
+    .setValues([snapshot]);
+  return {
+    status: "success",
+    sheetName: candidate.target.sheetName,
+    rowNumber: candidate.rowNumber,
+  };
+}
+
+function checkLampUpdates(contents) {
+  const sheets = getLampSheets(contents.sheetIds);
+  let totalChangedRows = 0;
+  const results = sheets.map(target => {
+    const sheet = target.sheet;
+    const auditColumn = getPlacementAuditColumns(sheet);
+    const lastRow = sheet.getLastRow();
+    let changedRows = 0;
+    if (lastRow < 2) return { sheetName: target.sheetName, changedRows };
+
+    const rowCount = lastRow - 1;
+    const data = sheet.getRange(2, 1, rowCount, 9).getDisplayValues();
+    const auditData = sheet.getRange(2, auditColumn, rowCount, 5).getValues();
+    const statusRange = sheet.getRange(2, 10, rowCount, 4);
+    const statusesByRow = statusRange.getDisplayValues();
+    data.forEach((row, index) => {
+      if (row.every(value => !normalizeCheckValue(value))) return;
+      const current = [
+        JSON.stringify([normalizeCheckValue(row[0]), normalizeCheckValue(row[4])]),
+        normalizeCheckValue(row[1]),
+        normalizeCheckValue(row[7]),
+        normalizeCheckValue(row[8]),
+      ];
+      const previous = auditData[index];
+      const isUnverified = !previous[4];
+      const changed = isUnverified
+        ? [true, true, true, true]
+        : current.map((value, fieldIndex) => value !== normalizeCheckValue(previous[fieldIndex]));
+      if (!changed.some(Boolean)) return;
+
+      changed.forEach((isChanged, fieldIndex) => {
+        if (isChanged && statusesByRow[index][fieldIndex] !== "🟡") {
+          statusesByRow[index][fieldIndex] = "🔴";
+        }
+      });
+      changedRows += 1;
+    });
+    statusRange
+      .setValues(statusesByRow)
+      .setBackgrounds(statusesByRow.map(statuses => statuses.map(status =>
+        status === "🔴" ? "#f4cccc" :
+          status === "🟢" ? "#d9ead3" :
+            status === "🟡" ? "#ffe599" : "#ffffff"
+      )))
+      .setHorizontalAlignment("CENTER");
+    totalChangedRows += changedRows;
+    return { sheetName: target.sheetName, changedRows };
+  });
+
+  return {
+    status: "success",
+    has_updates: totalChangedRows > 0,
+    changedRows: totalChangedRows,
+    sheets: results,
+  };
 }
 
 function generateWordDocument(sheetId, docTitle, sheetName, wordFolderId) {
