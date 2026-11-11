@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytesseract
@@ -5,6 +6,7 @@ import requests
 import streamlit as st
 from PIL import Image
 
+# 頁面以手機直向操作為主，使用置中版面與大尺寸表單控制項。
 st.set_page_config(
     page_title="光明燈上架確認系統",
     page_icon="🏮",
@@ -38,6 +40,7 @@ st.markdown(
 )
 
 
+# 使用瀏覽器語音合成回報上架及增修查詢結果。
 def speak_audio(text):
     safe_text = json.dumps(text, ensure_ascii=False).replace("<", "\\u003c")
     st.components.v1.html(
@@ -54,6 +57,7 @@ def speak_audio(text):
     )
 
 
+# GAS 共用既有 Web App 與 API 金鑰，回傳明確錯誤供畫面顯示。
 def call_gas_api(payload):
     try:
         response = requests.post(
@@ -73,6 +77,7 @@ def call_gas_api(payload):
     return result
 
 
+# 保留太歲分類選項；太歲工作表 ID 尚未提供，目前只開放光明燈。
 st.sidebar.title("🏮 燈品分類管理")
 category = st.sidebar.radio("選擇燈種類別", ["光明燈", "太歲"])
 
@@ -102,19 +107,59 @@ sheet_ids = {
 api_key = st.secrets["GAS_API_KEY"]
 
 st.title("🏮 光明燈上架確認")
-st.caption("請拍攝燈殼，確認辨識內容後送出；系統會比對 300 元及 500 元工作表。")
+st.caption("拍攝燈殼後，系統會自動比對 300 元及 500 元工作表並記錄上架結果。")
 
+# * 11111615 拍照後，系統直接拿 OCR 文字比對與 300／500 元工作表
 camera_image = st.camera_input("拍攝燈殼上的號碼、姓名及燈名")
-scanned_text = ""
-if camera_image is not None:
+if camera_image is None:
+    st.session_state["scan_image_digest"] = None
+    st.session_state["scan_result"] = {}
+else:
     try:
+        # 灰階及縮圖降低 OCR 處理負擔。
         image = Image.open(camera_image).convert("L")
         image.thumbnail((1800, 1800))
-        scanned_text = pytesseract.image_to_string(image, lang="chi_tra+eng").strip()
+        image_digest = hashlib.sha256(camera_image.getvalue()).hexdigest()
+        is_new_image = st.session_state.get("scan_image_digest") != image_digest
+        if is_new_image:
+            st.session_state["scan_image_digest"] = image_digest
+            st.session_state["scan_result"] = {}
+
+        scanned_text = pytesseract.image_to_string(
+            image,
+            lang="chi_tra+eng",
+            config="--psm 6",
+        ).strip()
         if scanned_text:
-            st.info(f"**OCR 辨識結果（請核對）：**\n\n{scanned_text}")
+            st.info(f"**OCR 掃描文字：**\n\n{scanned_text}")
+            if is_new_image:
+                with st.spinner("正在自動核對掃描文字與兩份工作表..."):
+                    result = call_gas_api(
+                        {
+                            "action": "scan_verify",
+                            "apiKey": api_key,
+                            "sheetIds": sheet_ids,
+                            "scannedText": scanned_text,
+                        }
+                    )
+                st.session_state["scan_result"] = result
+                if result.get("status") == "success":
+                    speak_audio("上架成功")
+                elif result.get("status") == "fail":
+                    errors = "、".join(result.get("errors", ["資料"]))
+                    speak_audio(f"上架失敗，不符合項目為{errors}，請重新掃描")
+                elif result.get("status") == "ambiguous":
+                    speak_audio("找到多筆相同姓名，無法判定，請重新掃描")
+                elif result.get("status") == "not_found":
+                    speak_audio("掃描文字未找到相符姓名或資料，請重新掃描")
         else:
-            st.warning("未辨識到文字，請調整拍攝角度或光線後重拍。")
+            st.warning("未辨識到文字，請調整拍攝角度或光線後重新掃描。")
+            if is_new_image:
+                st.session_state["scan_result"] = {
+                    "status": "not_found",
+                    "message": "沒有辨識到文字，請重新拍攝。",
+                }
+                speak_audio("未辨識到文字，請重新拍攝")
     except pytesseract.TesseractNotFoundError:
         st.error("伺服器找不到 Tesseract OCR，請確認 packages.txt 已安裝 OCR 套件。")
     except pytesseract.TesseractError as error:
@@ -122,62 +167,39 @@ if camera_image is not None:
     except OSError as error:
         st.error(f"無法讀取拍攝的圖片：{error}")
 
-if camera_image is not None:
-    with st.form("verify_lamp_form"):
-        st.subheader("確認或修正辨識內容")
-        number1 = st.text_input("光明燈 1 號碼")
-        name = st.text_input("姓名")
-        light_type1 = st.text_input("光明燈 1 種類")
-        number2 = st.text_input("光明燈 2 號碼（沒有請留白）")
-        light_type2 = st.text_input("光明燈 2 種類（沒有請留白）")
-        submitted = st.form_submit_button("🚀 送出驗證並上架")
-
-    if submitted:
-        if not number1.strip() or not name.strip() or not light_type1.strip():
-            st.error("請填寫光明燈 1 號碼、姓名及光明燈 1 種類。")
+if camera_image is not None and st.session_state.get("scan_image_digest"):
+    scan_result = st.session_state.get("scan_result", {})
+    if scan_result.get("status") == "success":
+        st.markdown(
+            '<div class="status-card" style="background:#d9ead3;color:#274e13">'
+            "🟢 上架成功</div>",
+            unsafe_allow_html=True,
+        )
+        st.success(
+            f"掃描內容符合「{scan_result['sheetName']}」"
+            f"第 {scan_result['rowNumber']} 列，已自動記錄綠燈。"
+        )
+    elif scan_result.get("status") in ("fail", "not_found", "ambiguous"):
+        errors = scan_result.get("errors", [])
+        if errors:
+            st.markdown(
+                '<div class="status-card" style="background:#ffe599;color:#7f6000">'
+                "🟡 上架失敗，請重新掃描</div>",
+                unsafe_allow_html=True,
+            )
+            st.error(f"不符合項目：**{'、'.join(errors)}**。")
         else:
-            payload = {
-                "action": "verify",
-                "apiKey": api_key,
-                "sheetIds": sheet_ids,
-                "number1": number1,
-                "number2": number2,
-                "name": name,
-                "light_type1": light_type1,
-                "light_type2": light_type2,
-            }
-            with st.spinner("正在核對 300 元及 500 元光明燈資料..."):
-                result = call_gas_api(payload)
-
-            if result.get("status") == "success":
-                speak_audio("上架成功")
-                st.markdown(
-                    '<div class="status-card" style="background:#d9ead3;color:#274e13">'
-                    "🟢 上架成功</div>",
-                    unsafe_allow_html=True,
-                )
-                st.success(
-                    f"已記錄於「{result['sheetName']}」第 {result['rowNumber']} 列。"
-                )
-            elif result.get("status") == "fail":
-                errors = result.get("errors", ["號碼", "姓名", "燈名"])
-                error_text = "、".join(errors)
-                speak_audio(f"上架失敗，不符合項目分別為{error_text}")
-                st.markdown(
-                    '<div class="status-card" style="background:#ffe599;color:#7f6000">'
-                    "🟡 上架失敗，請修正黃燈欄位</div>",
-                    unsafe_allow_html=True,
-                )
-                st.error(
-                    f"不符合項目：**{error_text}**。"
-                    "請確認輸入後重新拍攝並送出。"
-                )
-                if result.get("message"):
-                    st.caption(result["message"])
-            else:
-                st.error(result.get("message", "GAS 發生未預期錯誤。"))
+            st.warning(scan_result.get("message", "無法判定，請重新掃描。"))
+        if scan_result.get("sheetName"):
+            st.caption(
+                f"已在「{scan_result['sheetName']}」第 "
+                f"{scan_result['rowNumber']} 列標示不符合欄位。"
+            )
+    elif scan_result.get("status") == "error":
+        st.error(scan_result.get("message", "無法查詢工作表，請檢查 GAS 設定。"))
 
 st.divider()
+# 比對成功時保存的資料快照；新增或異動欄位會以紅燈提示重新掃描。
 if st.button("🔍 查詢增修資料"):
     payload = {
         "action": "check_updates",

@@ -25,8 +25,8 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    if (contents.action === "verify") {
-      return createJsonResponse(verifyLampPlacement(contents));
+    if (contents.action === "scan_verify") {
+      return createJsonResponse(verifyScannedLamp(contents));
     }
     if (contents.action === "check_updates") {
       return createJsonResponse(checkLampUpdates(contents));
@@ -94,6 +94,117 @@ function normalizeCheckValue(value) {
   return String(value == null ? "" : value).trim();
 }
 
+function normalizeScannedText(value) {
+  return String(value == null ? "" : value)
+    .normalize("NFC")
+    .replace(/[\s，。、「」『』：:；;,.!?！？、()（）［］【】"'`]/g, "");
+}
+
+function verifyScannedLamp(contents) {
+  const scannedText = normalizeScannedText(contents.scannedText);
+  if (!scannedText) {
+    return {
+      status: "not_found",
+      errors: ["文字"],
+      message: "沒有辨識到文字，請重新拍攝。",
+    };
+  }
+
+  const candidates = [];
+  getLampSheets(contents.sheetIds).forEach(target => {
+    const lastRow = target.sheet.getLastRow();
+    if (lastRow < 2) return;
+    const rows = target.sheet.getRange(2, 1, lastRow - 1, 9).getDisplayValues();
+    rows.forEach((row, index) => {
+      const name = normalizeCheckValue(row[4]);
+      const normalizedName = normalizeScannedText(name);
+      if (normalizedName.length < 2 || !scannedText.includes(normalizedName)) return;
+      const numberMatches = [row[0], row[1]].some(value => {
+        const number = normalizeScannedText(value);
+        return number && scannedText.includes(number);
+      });
+      candidates.push({ target, rowNumber: index + 2, row, name, numberMatches });
+    });
+  });
+
+  if (candidates.length === 0) {
+    return {
+      status: "not_found",
+      errors: ["姓名"],
+      message: "辨識文字中找不到符合的姓名，請重新拍攝。",
+    };
+  }
+  let match = candidates[0];
+  if (candidates.length > 1) {
+    const numberMatchedCandidates = candidates.filter(candidate => candidate.numberMatches);
+    if (numberMatchedCandidates.length === 1) {
+      match = numberMatchedCandidates[0];
+    } else {
+      return {
+        status: "ambiguous",
+        message: "同名資料需要掃描到唯一燈號才能判定，請重新拍攝清楚的燈號。",
+      };
+    }
+  }
+  const row = match.row;
+  const scannedHas = value => {
+    const normalized = normalizeScannedText(value);
+    return !normalized || scannedText.includes(normalized);
+  };
+  const number1Matches =
+    Boolean(normalizeCheckValue(row[0])) && scannedHas(row[0]);
+  const nameMatches =
+    Boolean(normalizeCheckValue(row[4])) && scannedHas(row[4]);
+  const number2Matches = scannedHas(row[1]);
+  const lightType1Matches =
+    Boolean(normalizeCheckValue(row[7])) && scannedHas(row[7]);
+  const lightType2Matches = scannedHas(row[8]);
+  const checks = [
+    number1Matches && nameMatches,
+    number2Matches,
+    lightType1Matches,
+    lightType2Matches,
+  ];
+  const errors = [];
+  if (!number1Matches || !number2Matches) errors.push("號碼");
+  if (!nameMatches) errors.push("姓名");
+  if (!lightType1Matches || !lightType2Matches) errors.push("燈名");
+
+  const auditColumn = getPlacementAuditColumns(match.target.sheet);
+  match.target.sheet
+    .getRange(match.rowNumber, 10, 1, 4)
+    .setValues([checks.map(isMatch => isMatch ? "🟢" : "🟡")])
+    .setBackgrounds([checks.map(isMatch => isMatch ? "#d9ead3" : "#ffe599")])
+    .setHorizontalAlignment("CENTER");
+
+  if (errors.length > 0) {
+    return {
+      status: "fail",
+      errors: Array.from(new Set(errors)),
+      sheetName: match.target.sheetName,
+      rowNumber: match.rowNumber,
+      name: match.name,
+    };
+  }
+
+  const snapshot = [
+    JSON.stringify([normalizeCheckValue(row[0]), normalizeCheckValue(row[4])]),
+    normalizeCheckValue(row[1]),
+    normalizeCheckValue(row[7]),
+    normalizeCheckValue(row[8]),
+    new Date(),
+  ];
+  match.target.sheet
+    .getRange(match.rowNumber, auditColumn, 1, snapshot.length)
+    .setValues([snapshot]);
+  return {
+    status: "success",
+    sheetName: match.target.sheetName,
+    rowNumber: match.rowNumber,
+    name: match.name,
+  };
+}
+
 function getPlacementAuditColumns(sheet) {
   const headers = [
     "_上架確認_號碼姓名",
@@ -127,114 +238,6 @@ function getPlacementAuditColumns(sheet) {
     if (!cell.getDisplayValue()) cell.setValue(header);
   });
   return startColumn;
-}
-
-function getPlacementCandidate(sheets, number1, name, number2) {
-  const candidates = [];
-  sheets.forEach(target => {
-    const lastRow = target.sheet.getLastRow();
-    if (lastRow < 2) return;
-    const rows = target.sheet.getRange(2, 1, lastRow - 1, 9).getDisplayValues();
-    rows.forEach((row, index) => {
-      const rowNumber1 = normalizeCheckValue(row[0]);
-      const rowNumber2 = normalizeCheckValue(row[1]);
-      const rowName = normalizeCheckValue(row[4]);
-      if (
-        (number1 && rowNumber1 === number1) ||
-        (name && rowName === name) ||
-        (number2 && rowNumber2 === number2)
-      ) {
-        const score =
-          (number1 && rowNumber1 === number1 ? 4 : 0) +
-          (name && rowName === name ? 4 : 0) +
-          (number2 && rowNumber2 === number2 ? 2 : 0);
-        candidates.push({
-          target,
-          rowNumber: index + 2,
-          row,
-          score,
-        });
-      }
-    });
-  });
-  if (candidates.length === 0) return null;
-
-  const highestScore = candidates.reduce(
-    (highest, candidate) => Math.max(highest, candidate.score),
-    -Infinity
-  );
-  const bestCandidates = candidates.filter(candidate => candidate.score === highestScore);
-  return bestCandidates.length === 1 ? bestCandidates[0] : null;
-}
-
-function verifyLampPlacement(contents) {
-  const number1 = normalizeCheckValue(contents.number1 || contents.number);
-  const number2 = normalizeCheckValue(contents.number2);
-  const name = normalizeCheckValue(contents.name);
-  const lightType1 = normalizeCheckValue(contents.light_type1 || contents.light_type);
-  const lightType2 = normalizeCheckValue(contents.light_type2);
-  const sheets = getLampSheets(contents.sheetIds);
-  const candidate = getPlacementCandidate(sheets, number1, name, number2);
-  if (!candidate) {
-    return {
-      status: "fail",
-      errors: ["號碼", "姓名"],
-      message: "找不到唯一符合的資料列，請確認號碼及姓名",
-    };
-  }
-
-  const row = candidate.row;
-  const number1Matches = Boolean(number1) && normalizeCheckValue(row[0]) === number1;
-  const nameMatches = Boolean(name) && normalizeCheckValue(row[4]) === name;
-  const number2Matches = normalizeCheckValue(row[1]) === number2;
-  const lightType1Matches =
-    Boolean(lightType1) && normalizeCheckValue(row[7]) === lightType1;
-  const lightType2Matches = normalizeCheckValue(row[8]) === lightType2;
-  const checks = [
-    number1Matches && nameMatches,
-    number2Matches,
-    lightType1Matches,
-    lightType2Matches,
-  ];
-  const auditColumn = getPlacementAuditColumns(candidate.target.sheet);
-  const errors = [];
-  if (!number1Matches) errors.push("號碼");
-  if (!nameMatches) errors.push("姓名");
-  if (!number2Matches) errors.push("號碼2");
-  if (!lightType1Matches) errors.push("燈名");
-  if (!lightType2Matches) errors.push("燈名2");
-
-  const statuses = checks.map(matches => matches ? "🟢" : "🟡");
-  candidate.target.sheet
-    .getRange(candidate.rowNumber, 10, 1, 4)
-    .setValues([statuses])
-    .setBackgrounds([checks.map(matches => matches ? "#d9ead3" : "#ffe599")])
-    .setHorizontalAlignment("CENTER");
-
-  if (errors.length > 0) {
-    return {
-      status: "fail",
-      errors,
-      sheetName: candidate.target.sheetName,
-      rowNumber: candidate.rowNumber,
-    };
-  }
-
-  const snapshot = [
-    JSON.stringify([normalizeCheckValue(row[0]), normalizeCheckValue(row[4])]),
-    normalizeCheckValue(row[1]),
-    normalizeCheckValue(row[7]),
-    normalizeCheckValue(row[8]),
-    new Date(),
-  ];
-  candidate.target.sheet
-    .getRange(candidate.rowNumber, auditColumn, 1, snapshot.length)
-    .setValues([snapshot]);
-  return {
-    status: "success",
-    sheetName: candidate.target.sheetName,
-    rowNumber: candidate.rowNumber,
-  };
 }
 
 function checkLampUpdates(contents) {
