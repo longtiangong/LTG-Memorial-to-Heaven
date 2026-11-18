@@ -6,7 +6,7 @@ function authorizeDriveAccess() {
 
 function authorizeSpreadsheetAccess() {
   const properties = PropertiesService.getScriptProperties();
-  const sheetIds = ["TAISUI_SHEET_500_ID ", "TAISUI_SHEET_300_ID "]
+  const sheetIds = ["TAISUI_SHEET_500_ID", "TAISUI_SHEET_300_ID"]
     .map(propertyName => properties.getProperty(propertyName))
     .filter(Boolean);
   if (sheetIds.length === 0) {
@@ -35,12 +35,12 @@ function doPost(e) {
     const lampType = contents.lampType || "500";
     const lampOptions = {
       "300": {
-        propertyName: "TAISUI_SHEET_300_ID ",
+        propertyName: "TAISUI_SHEET_300_ID",
         sheetName: "300元太歲燈",
         defaultDocTitle: "300元太歲燈疏文",
       },
       "500": {
-        propertyName: "TAISUI_SHEET_500_ID ",
+        propertyName: "TAISUI_SHEET_500_ID",
         sheetName: "500元太歲燈",
         defaultDocTitle: "500元太歲燈疏文",
       },
@@ -80,7 +80,7 @@ function createJsonResponse(result) {
 
 function getLampSheets(sheetIds) {
   if (!sheetIds || !sheetIds["300"] || !sheetIds["500"]) {
-    throw new Error("請確認 Secrets 已設定 TAISUI_SHEET_300_ID  與 TAISUI_SHEET_500_ID ");
+    throw new Error("請確認 Secrets 已設定 TAISUI_SHEET_300_ID 與 TAISUI_SHEET_500_ID");
   }
   return ["300", "500"].map(tier => {
     const sheetName = `${tier}元太歲燈`;
@@ -348,7 +348,7 @@ function generateWordDocument(sheetId, docTitle, sheetName, wordFolderId) {
   if (data.length < 2) throw new Error("試算表沒有可產生的資料");
 
   data.shift();
-  if (sheet.getLastColumn() < 9) {
+  if (sheet.getLastColumn() < 7) {
     throw new Error(`『${sheetName}』工作表至少需要 A 至 G 欄`);
   }
 
