@@ -50,7 +50,7 @@ function doPost(e) {
     }
     const lampOption = lampOptions[lampType];
 
-    const sheetId = contents.sheetId ||
+    const sheetId = contents.taisuisheetId ||
       PropertiesService.getScriptProperties().getProperty(lampOption.propertyName);
     if (!sheetId) throw new Error(`請設定 ${lampOption.propertyName}`);
     const docTitle = contents.docTitle || lampOption.defaultDocTitle;
