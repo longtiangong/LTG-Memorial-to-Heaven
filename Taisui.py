@@ -29,7 +29,7 @@ lamp_type = st.selectbox(
     ["500", "300"],
     format_func=lambda value: f"{value}元太歲燈",
 )
-sheet_id = st.secrets.get(f"SHEET_{lamp_type}_ID", "")
+taisui_sheet_id = st.secrets.get(f"TAISUI_SHEET_{lamp_type}_ID", "")
 taisui_web_app_url = st.secrets.get("TAISUI_WEB_APP_URL", "")
 gas_api_key = st.secrets.get("GAS_API_KEY", "")
 word_folder_id = st.secrets.get("WORD_FOLDER_ID", "")
@@ -37,10 +37,10 @@ word_folder_id = st.secrets.get("WORD_FOLDER_ID", "")
 doc_title = st.text_input("輸出的 Word 檔名", value=f"{lamp_type}元太歲燈疏文")
 
 if st.button(f"🚀 開始產出 {lamp_type}元太歲燈 A3 疏文文件"):
-    if not sheet_id:
-        st.error(f"請確認 Secrets 中已設定 SHEET_{lamp_type}_ID")
+    if not taisui_sheet_id:
+        st.error(f"請確認 Secrets 中已設定 TAISUI_SHEET_{lamp_type}_ID")
     elif not taisui_web_app_url or not gas_api_key:
-        st.error("請確認 Secrets 中已設定 taisui_web_app_url 與 GAS_API_KEY")
+        st.error("請確認 Secrets 中已設定 TAISUI_WEB_APP_URL 與 GAS_API_KEY")
     elif not word_folder_id:
         st.error("請確認 Secrets 中已設定 WORD_FOLDER_ID")
     else:
@@ -48,7 +48,7 @@ if st.button(f"🚀 開始產出 {lamp_type}元太歲燈 A3 疏文文件"):
             payload = {
                 "apiKey": gas_api_key,
                 "lampType": lamp_type,
-                "sheetId": sheet_id,
+                "taisuisheetId": taisui_sheet_id,
                 "docTitle": doc_title,
                 "wordFolderId": word_folder_id,
             }
