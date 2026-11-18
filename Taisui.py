@@ -30,7 +30,7 @@ lamp_type = st.selectbox(
     format_func=lambda value: f"{value}元太歲燈",
 )
 sheet_id = st.secrets.get(f"SHEET_{lamp_type}_ID", "")
-TAISUI_WEB_APP_URL = st.secrets.get("TAISUI_WEB_APP_URL", "")
+taisui_web_app_url = st.secrets.get("TAISUI_WEB_APP_URL", "")
 gas_api_key = st.secrets.get("GAS_API_KEY", "")
 word_folder_id = st.secrets.get("WORD_FOLDER_ID", "")
 
@@ -39,8 +39,8 @@ doc_title = st.text_input("輸出的 Word 檔名", value=f"{lamp_type}元太歲�
 if st.button(f"🚀 開始產出 {lamp_type}元太歲燈 A3 疏文文件"):
     if not sheet_id:
         st.error(f"請確認 Secrets 中已設定 SHEET_{lamp_type}_ID")
-    elif not TAISUI_WEB_APP_URL or not gas_api_key:
-        st.error("請確認 Secrets 中已設定 TAISUI_WEB_APP_URL 與 GAS_API_KEY")
+    elif not taisui_web_app_url or not gas_api_key:
+        st.error("請確認 Secrets 中已設定 taisui_web_app_url 與 GAS_API_KEY")
     elif not word_folder_id:
         st.error("請確認 Secrets 中已設定 WORD_FOLDER_ID")
     else:
@@ -54,7 +54,7 @@ if st.button(f"🚀 開始產出 {lamp_type}元太歲燈 A3 疏文文件"):
             }
 
             try:
-                response = requests.post(TAISUI_WEB_APP_URL, json=payload, timeout=60)
+                response = requests.post(taisui_web_app_url, json=payload, timeout=60)
                 result = response.json()
 
                 if result.get("status") == "success" and result.get("wordDownloadUrl"):
