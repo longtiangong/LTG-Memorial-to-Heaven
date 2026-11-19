@@ -100,6 +100,26 @@ function normalizeScannedText(value) {
     .replace(/[\s，。、「」『』：:；;,.!?！？、()（）［］【】"'`]/g, "");
 }
 
+function extractScannedTokens(rawText) {
+  const parts = String(rawText == null ? "" : rawText)
+    .normalize("NFC")
+    .split(/[\s，。、「」『』：:；;,.!?！？、()（）［］【】"'`]+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+
+  const tokens = new Set();
+  parts.forEach(part => {
+    const normalized = normalizeScannedText(part);
+    if (normalized) tokens.add(normalized);
+    // 若 OCR 把英數編號與中文黏在一起（例如 "A10李王"），額外拆出獨立英數編號
+    const matchedCodes = normalized.match(/[A-Za-z]{0,3}\d{1,5}/g);
+    if (matchedCodes) {
+      matchedCodes.forEach(code => tokens.add(code));
+    }
+  });
+  return tokens;
+}
+
 function verifyScannedLamp(contents) {
   const scannedText = normalizeScannedText(contents.scannedText);
   if (!scannedText) {
@@ -131,15 +151,24 @@ function verifyScannedLamp(contents) {
     };
   }
 
+  const scannedTokens = extractScannedTokens(contents.scannedText);
+  const hintNumbers = new Set(
+    ((contents.scanHints && contents.scanHints.candidateNumbers) || [])
+      .map(normalizeScannedText)
+      .filter(Boolean)
+  );
+
   const numberCandidates = [];
   nameCandidates.forEach(candidate => {
     [candidate.row[0], candidate.row[1]].forEach((value, pairIndex) => {
       const number = normalizeScannedText(value);
-      if (number && scannedText.includes(number)) {
+      if (!number) return;
+      if (scannedTokens.has(number) || hintNumbers.has(number)) {
         numberCandidates.push({ ...candidate, pairIndex });
       }
     });
   });
+
   if (numberCandidates.length > 1) {
     return {
       status: "ambiguous",
@@ -178,26 +207,19 @@ function verifyScannedLamp(contents) {
 
   const row = match.row;
   const numberColumn = match.pairIndex;
-  const typeColumn = numberColumn === 0 ? 7 : 8;
   const number = normalizeCheckValue(row[numberColumn]);
-  
   const name = normalizeCheckValue(row[4]);
-  const scannedHas = value => {
-    const normalized = normalizeScannedText(value);
-    return Boolean(normalized) && scannedText.includes(normalized);
-  };
-  const numberMatches = scannedHas(number);
-  const nameMatches = scannedHas(name);
+
+  const numberMatches = scannedTokens.has(normalizeScannedText(number)) || hintNumbers.has(normalizeScannedText(number));
+  const nameMatches = scannedText.includes(normalizeScannedText(name));
   
   const numberStatusColumn = numberColumn === 0 ? 10 : 11;
-  const typeStatusColumn = numberColumn === 0 ? 12 : 13;
 
   match.target.sheet
     .getRange(match.rowNumber, numberStatusColumn)
     .setValue(numberMatches && nameMatches ? "🟢" : "🟡")
     .setBackground(numberMatches && nameMatches ? "#d9ead3" : "#ffe599")
     .setHorizontalAlignment("CENTER");
-  
 
   const errors = [];
   if (!numberMatches) errors.push("號碼");
@@ -229,7 +251,6 @@ function verifyScannedLamp(contents) {
     name,
     lampIndex: numberColumn + 1,
     number,
-    
   };
 }
 
@@ -257,7 +278,6 @@ function getPlacementAuditColumns(sheet) {
   const statusHeaders = [
     "確認太歲燈1號碼及姓名",
     "確認太歲燈2號碼",
-   
   ];
   statusHeaders.forEach((header, index) => {
     const cell = sheet.getRange(1, 10 + index);
@@ -360,7 +380,6 @@ function generateWordDocument(sheetId, docTitle, sheetName, wordFolderId) {
     name: 4,         // E欄：姓名
     birthDate: 5,    // F欄：出生年月日
     birthTime: 6,    // G欄：生時
-    
   };
 
   const timezone = ss.getSpreadsheetTimeZone();
@@ -375,7 +394,6 @@ function generateWordDocument(sheetId, docTitle, sheetName, wordFolderId) {
       getCellText(row[columns.name], timezone),
       getCellText(row[columns.birthDate], timezone, "yyyy年MM月dd日"),
       getCellText(row[columns.birthTime], timezone, "HH:mm"),
-      
     ];
     if (member.every(value => !value)) return;
 
@@ -740,9 +758,9 @@ function buildWordSpacerRow(
 
 function escapeXml(value) {
   return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/&/g, "&")
+    .replace(/</g, "<")
+    .replace(/>/g, ">");
 }
 
 function getCellText(value, timezone, datePattern) {
@@ -758,7 +776,7 @@ function createA3PortraitWordFile(groups, docTitle, wordFolderId) {
     Utilities.newBlob(
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
-      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
       '<Default Extension="xml" ContentType="application/xml"/>' +
       '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
       '</Types>',
