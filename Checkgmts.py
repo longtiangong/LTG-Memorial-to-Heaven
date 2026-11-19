@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 
 import numpy as np
 from opencc import OpenCC
@@ -10,7 +11,7 @@ import streamlit as st
 
 # 頁面以手機直向操作為主，使用置中版面與大尺寸表單控制項。
 st.set_page_config(
-    page_title="光明燈上架確認系統",
+    page_title="燈品上架確認系統",
     page_icon="🏮",
     layout="centered",
 )
@@ -130,6 +131,29 @@ def run_ocr_with_confidence(image: Image.Image, ocr_engine: RapidOCR, converter:
     return scanned_text, details
 
 
+def extract_scan_hints(scanned_text: str) -> dict:
+    """從 OCR 文字中擷取候選燈號與行清單，協助同名多筆時以燈號精準比對。"""
+    raw_lines = [line.strip() for line in (scanned_text or "").splitlines() if line.strip()]
+    tokens = []
+    for line in raw_lines:
+        tokens.extend(re.split(r"[\s,，/｜|]+", line))
+
+    candidate_numbers = []
+    seen_nums = set()
+    for tok in tokens:
+        cleaned = re.sub(r"[^A-Za-z0-9\-]", "", tok).upper()
+        if cleaned and re.fullmatch(r"[A-Z]{0,3}\d{1,5}", cleaned):
+            if cleaned not in seen_nums:
+                seen_nums.add(cleaned)
+                candidate_numbers.append(cleaned)
+
+    return {
+        "lines": raw_lines,
+        "candidateNumbers": candidate_numbers,
+        "primaryNumber": candidate_numbers[0] if candidate_numbers else "",
+    }
+
+
 # * 11191445 調整長方形大小
 def get_vertical_rect_box(
     image_size: tuple[int, int],
@@ -210,10 +234,10 @@ def speak_audio(text):
 
 
 # GAS 共用既有 Web App 與 API 金鑰，回傳明確錯誤供畫面顯示。
-def call_gas_api(payload):
+def call_gas_api(web_app_url: str, payload: dict):
     try:
         response = requests.post(
-            st.secrets["WEB_APP_URL"],
+            web_app_url,
             json=payload,
             timeout=60,
         )
@@ -229,51 +253,73 @@ def call_gas_api(payload):
     return result
 
 
-# 保留太歲分類選項；太歲工作表 ID 尚未提供，目前只開放光明燈。
 st.sidebar.title("🏮 燈品分類管理")
 category = st.sidebar.radio("選擇燈種類別", ["光明燈", "太歲"])
 
-if category == "太歲":
-    st.title("🏮 太歲上架確認")
-    st.info("目前先完成光明燈；太歲工作表建立後再開放此功能。")
+if not st.secrets.get("GAS_API_KEY"):
+    st.error("請在 Streamlit Secrets 設定：GAS_API_KEY")
     st.stop()
 
-required_secrets = (
-    "TAISUI_SHEET_300_ID",
-    "TAISUI_SHEET_500_ID",
-    "TAISUI_WEB_APP_URL",
-    "GAS_API_KEY",
-)
-missing_secrets = [key for key in required_secrets if not st.secrets.get(key)]
-if missing_secrets:
-    st.error(f"請在 Streamlit Secrets 設定：{', '.join(missing_secrets)}")
-    st.stop()
-if not st.secrets["TAISUI_WEB_APP_URL"].strip().endswith("/exec"):
-    st.error("TAISUI_WEB_APP_URL 必須是 Apps Script Web App 的 /exec 網址。")
-    st.stop()
-
-taisui_sheet_ids = {
-    "300": st.secrets["TAISUI_SHEET_300_ID"],
-    "500": st.secrets["TAISUI_SHEET_500_ID"],
-}
 api_key = st.secrets["GAS_API_KEY"]
+
+if category == "光明燈":
+    required_keys = ("SHEET_300_ID", "SHEET_500_ID", "WEB_APP_URL")
+    missing_keys = [k for k in required_keys if not st.secrets.get(k)]
+    if missing_keys:
+        st.error(f"請在 Streamlit Secrets 設定光明燈參數：{', '.join(missing_keys)}")
+        st.stop()
+    web_app_url = st.secrets["WEB_APP_URL"].strip()
+    if not web_app_url.endswith("/exec"):
+        st.error("WEB_APP_URL 必須是 Apps Script Web App 的 /exec 網址。")
+        st.stop()
+    sheet_ids = {
+        "300": st.secrets["SHEET_300_ID"],
+        "500": st.secrets["SHEET_500_ID"],
+    }
+    label_prefix = "光明燈"
+else:
+    required_keys = ("TAISUI_SHEET_300_ID", "TAISUI_SHEET_500_ID")
+    missing_keys = [k for k in required_keys if not st.secrets.get(k)]
+    web_app_url = (
+        st.secrets.get("TAISUI_WEB_APP_URL") or st.secrets.get("WEB_APP_URL") or ""
+    ).strip()
+    if not web_app_url:
+        missing_keys.append("TAISUI_WEB_APP_URL 或 WEB_APP_URL")
+    if missing_keys:
+        st.error(f"請在 Streamlit Secrets 設定太歲參數：{', '.join(missing_keys)}")
+        st.stop()
+    if not web_app_url.endswith("/exec"):
+        st.error("太歲使用的 Web App 網址必須是以 /exec 結尾的 Apps Script 網址。")
+        st.stop()
+    sheet_ids = {
+        "300": st.secrets["TAISUI_SHEET_300_ID"],
+        "500": st.secrets["TAISUI_SHEET_500_ID"],
+    }
+    label_prefix = "太歲"
 
 # * 1191425 調整OCR功能並加信心度
 ocr_engine, cc_converter = load_ocr_models()
-if "rotate_deg" not in st.session_state:
-    st.session_state["rotate_deg"] = 0
 
-st.title("🏮 光明燈上架確認")
-st.caption("拍攝燈殼後，系統會自動辨識文字、比對 300 元及 500 元工作表並記錄上架結果。")
+rotate_key_state = f"rotate_deg_{category}"
+scan_img_key_state = f"scan_image_key_{category}"
+scan_res_key_state = f"scan_result_{category}"
+scan_txt_key_state = f"scan_ocr_text_{category}"
+scan_det_key_state = f"scan_ocr_details_{category}"
+
+if rotate_key_state not in st.session_state:
+    st.session_state[rotate_key_state] = 0
+
+st.title(f"🏮 {label_prefix}上架確認")
+st.caption(f"拍攝{label_prefix}燈殼後，系統會自動辨識文字、比對 300 元及 500 元工作表並記錄上架結果。")
 
 # * 1191425 調整OCR功能並加信心度
 st.caption("請先按下方「Take Photo」拍照，拍照後下方會顯示 OCR 辨識區域與結果。")
-camera_image = st.camera_input("拍攝燈殼上的號碼、姓名及燈名")
+camera_image = st.camera_input("拍攝燈殼上的號碼、姓名及燈名", key=f"camera_{category}")
 if camera_image is None:
-    st.session_state["scan_image_key"] = None
-    st.session_state["scan_result"] = {}
-    st.session_state["scan_ocr_text"] = ""
-    st.session_state["scan_ocr_details"] = []
+    st.session_state[scan_img_key_state] = None
+    st.session_state[scan_res_key_state] = {}
+    st.session_state[scan_txt_key_state] = ""
+    st.session_state[scan_det_key_state] = []
 else:
     try:
         raw_bytes = camera_image.getvalue()
@@ -281,11 +327,11 @@ else:
 
         col_rot1, col_rot2 = st.columns(2)
         with col_rot1:
-            if st.button("↻ 順時針轉 90°"):
-                st.session_state["rotate_deg"] = (st.session_state["rotate_deg"] + 90) % 360
+            if st.button("↻ 順時針轉 90°", key=f"rot_cw_{category}"):
+                st.session_state[rotate_key_state] = (st.session_state[rotate_key_state] + 90) % 360
         with col_rot2:
-            if st.button("↺ 逆時針轉 90°"):
-                st.session_state["rotate_deg"] = (st.session_state["rotate_deg"] - 90) % 360
+            if st.button("↺ 逆時針轉 90°", key=f"rot_ccw_{category}"):
+                st.session_state[rotate_key_state] = (st.session_state[rotate_key_state] - 90) % 360
 
         # * 11191445 調整長方形大小
         rect_h_ratio = 0.94
@@ -296,7 +342,12 @@ else:
 
         with st.expander("微調 OCR 掃描區域大小與位置"):
             rect_h_ratio = st.slider(
-                "區域高比例", min_value=0.40, max_value=0.98, value=rect_h_ratio, step=0.02
+                "區域高比例",
+                min_value=0.40,
+                max_value=0.98,
+                value=rect_h_ratio,
+                step=0.02,
+                key=f"h_ratio_{category}",
             )
             rect_aspect_w_to_h = st.slider(
                 "直立寬高比（小於 1 為直立）",
@@ -304,6 +355,7 @@ else:
                 max_value=0.95,
                 value=rect_aspect_w_to_h,
                 step=0.05,
+                key=f"aspect_{category}",
             )
             rect_width_scale = st.slider(
                 "寬度倍率（預設 1.5 倍）",
@@ -311,9 +363,15 @@ else:
                 max_value=2.0,
                 value=rect_width_scale,
                 step=0.1,
+                key=f"w_scale_{category}",
             )
             rect_offset_x_ratio = st.slider(
-                "左右位移", min_value=-0.25, max_value=0.25, value=rect_offset_x_ratio, step=0.02
+                "左右位移",
+                min_value=-0.25,
+                max_value=0.25,
+                value=rect_offset_x_ratio,
+                step=0.02,
+                key=f"off_x_{category}",
             )
             rect_offset_y_ratio = st.slider(
                 "上下位移（負值往上）",
@@ -321,15 +379,16 @@ else:
                 max_value=0.25,
                 value=rect_offset_y_ratio,
                 step=0.02,
+                key=f"off_y_{category}",
             )
 
-        rotate_deg = st.session_state["rotate_deg"]
+        rotate_deg = st.session_state[rotate_key_state]
         scan_key = (
-            f"{base_digest}:{rotate_deg}:"
+            f"{category}:{base_digest}:{rotate_deg}:"
             f"{rect_h_ratio}:{rect_aspect_w_to_h}:{rect_width_scale}:"
             f"{rect_offset_x_ratio}:{rect_offset_y_ratio}"
         )
-        is_new_image = st.session_state.get("scan_image_key") != scan_key
+        is_new_image = st.session_state.get(scan_img_key_state) != scan_key
 
         # 縮圖降低 OCR 處理負擔，並依旋轉角度轉正。
         image = Image.open(camera_image).convert("RGB")
@@ -355,10 +414,10 @@ else:
         )
 
         if is_new_image:
-            st.session_state["scan_image_key"] = scan_key
-            st.session_state["scan_result"] = {}
-            st.session_state["scan_ocr_text"] = ""
-            st.session_state["scan_ocr_details"] = []
+            st.session_state[scan_img_key_state] = scan_key
+            st.session_state[scan_res_key_state] = {}
+            st.session_state[scan_txt_key_state] = ""
+            st.session_state[scan_det_key_state] = []
 
             # * 1191425 調整OCR功能並加信心度
             with st.spinner("正在進行 OCR 文字辨識..."):
@@ -366,43 +425,52 @@ else:
                     cropped_image, ocr_engine, cc_converter
                 )
 
-            st.session_state["scan_ocr_text"] = scanned_text
-            st.session_state["scan_ocr_details"] = ocr_details
+            st.session_state[scan_txt_key_state] = scanned_text
+            st.session_state[scan_det_key_state] = ocr_details
 
             if scanned_text:
+                scan_hints = extract_scan_hints(scanned_text)
                 with st.spinner("正在自動核對掃描文字與兩份工作表..."):
                     result = call_gas_api(
+                        web_app_url,
                         {
                             "action": "scan_verify",
+                            "category": category,
                             "apiKey": api_key,
-                            "taisuisheetIds": taisui_sheet_ids,
+                            "sheetIds": sheet_ids,
                             "scannedText": scanned_text,
                             "ocrDetails": ocr_details,
-                        }
+                            "scanHints": scan_hints,
+                            "matchByNumberFirst": True,
+                        },
                     )
-                st.session_state["scan_result"] = result
+                st.session_state[scan_res_key_state] = result
                 if result.get("status") == "success":
+                    light_type = (
+                        result.get("lightType") or result.get("lampType") or ""
+                    ).strip()
+                    light_audio = f"，燈名{light_type}" if light_type else ""
                     speak_audio(
-                        f"上架成功，{result['sheetName']}，"
-                        f"第{result['lampIndex']}組，號碼"
-                        f"{result['number']}，燈名{result['lightType']}"
+                        f"上架成功，{result.get('sheetName', label_prefix)}，"
+                        f"第{result.get('lampIndex', '')}組，號碼"
+                        f"{result.get('number', '')}{light_audio}"
                     )
                 elif result.get("status") == "fail":
                     errors = "、".join(result.get("errors", ["資料"]))
                     speak_audio(f"上架失敗，不符合項目為{errors}，請重新掃描")
                 elif result.get("status") == "ambiguous":
-                    speak_audio("找到多筆相同姓名，無法判定，請重新掃描")
+                    speak_audio("找到多筆相同姓名與燈號，無法判定，請重新掃描")
                 elif result.get("status") == "not_found":
                     speak_audio("掃描文字未找到相符姓名或資料，請重新掃描")
             else:
-                st.session_state["scan_result"] = {
+                st.session_state[scan_res_key_state] = {
                     "status": "not_found",
                     "message": "沒有辨識到文字，請重新拍攝。",
                 }
                 speak_audio("未辨識到文字，請重新拍攝")
 
-        scanned_text = st.session_state.get("scan_ocr_text", "")
-        ocr_details = st.session_state.get("scan_ocr_details", [])
+        scanned_text = st.session_state.get(scan_txt_key_state, "")
+        ocr_details = st.session_state.get(scan_det_key_state, [])
 
         if scanned_text:
             st.info(f"**OCR 掃描文字（繁體中文）：**\n\n{scanned_text}")
@@ -426,19 +494,23 @@ else:
     except Exception as error:
         st.error(f"OCR 辨識失敗：{error}")
 
-if camera_image is not None and st.session_state.get("scan_image_key"):
-    scan_result = st.session_state.get("scan_result", {})
+if camera_image is not None and st.session_state.get(scan_img_key_state):
+    scan_result = st.session_state.get(scan_res_key_state, {})
     if scan_result.get("status") == "success":
+        light_type = (
+            scan_result.get("lightType") or scan_result.get("lampType") or ""
+        ).strip()
+        light_text = f"，燈名「{light_type}」" if light_type else ""
         st.markdown(
             '<div class="status-card" style="background:#d9ead3;color:#274e13">'
             "🟢 上架成功</div>",
             unsafe_allow_html=True,
         )
         st.success(
-            f"符合「{scan_result['sheetName']}」："
-            f"第 {scan_result['lampIndex']} 組，號碼 "
-            f"{scan_result['number']}，燈名「{scan_result['lightType']}」；"
-            f"已在第 {scan_result['rowNumber']} 列記錄綠燈。"
+            f"符合「{scan_result.get('sheetName', label_prefix)}」："
+            f"第 {scan_result.get('lampIndex', '')} 組，號碼 "
+            f"{scan_result.get('number', '')}{light_text}；"
+            f"已在第 {scan_result.get('rowNumber', '')} 列記錄綠燈。"
         )
     elif scan_result.get("status") in ("fail", "not_found", "ambiguous"):
         errors = scan_result.get("errors", [])
@@ -461,14 +533,15 @@ if camera_image is not None and st.session_state.get("scan_image_key"):
 
 st.divider()
 # 比對成功時保存的資料快照；新增或異動欄位會以紅燈提示重新掃描。
-if st.button("🔍 查詢增修資料"):
+if st.button("🔍 查詢增修資料", key=f"check_updates_{category}"):
     payload = {
         "action": "check_updates",
+        "category": category,
         "apiKey": api_key,
         "sheetIds": sheet_ids,
     }
-    with st.spinner("正在檢查兩份光明燈工作表..."):
-        result = call_gas_api(payload)
+    with st.spinner(f"正在檢查兩份{label_prefix}工作表..."):
+        result = call_gas_api(web_app_url, payload)
 
     if result.get("status") != "success":
         st.error(result.get("message", "查詢增修資料失敗。"))
@@ -487,4 +560,4 @@ if st.button("🔍 查詢增修資料"):
         st.warning("請逐筆拍攝並完成驗證；通過後該列燈號會更新為綠燈。")
     else:
         speak_audio("目前資料皆已上架")
-        st.success("目前兩份工作表都沒有待確認的新增或修改資料。")
+        st.success(f"目前兩份{label_prefix}工作表都沒有待確認的新增或修改資料。")
