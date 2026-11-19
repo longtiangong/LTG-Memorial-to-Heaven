@@ -239,22 +239,22 @@ if category == "太歲":
     st.stop()
 
 required_secrets = (
-    "SHEET_300_ID",
-    "SHEET_500_ID",
-    "WEB_APP_URL",
+    "TAISUI_SHEET_300_ID",
+    "TAISUI_SHEET_500_ID",
+    "TAISUI_WEB_APP_URL",
     "GAS_API_KEY",
 )
 missing_secrets = [key for key in required_secrets if not st.secrets.get(key)]
 if missing_secrets:
     st.error(f"請在 Streamlit Secrets 設定：{', '.join(missing_secrets)}")
     st.stop()
-if not st.secrets["WEB_APP_URL"].strip().endswith("/exec"):
-    st.error("WEB_APP_URL 必須是 Apps Script Web App 的 /exec 網址。")
+if not st.secrets["TAISUI_WEB_APP_URL"].strip().endswith("/exec"):
+    st.error("TAISUI_WEB_APP_URL 必須是 Apps Script Web App 的 /exec 網址。")
     st.stop()
 
-sheet_ids = {
-    "300": st.secrets["SHEET_300_ID"],
-    "500": st.secrets["SHEET_500_ID"],
+taisui_sheet_ids = {
+    "300": st.secrets["TAISUI_SHEET_300_ID"],
+    "500": st.secrets["TAISUI_SHEET_500_ID"],
 }
 api_key = st.secrets["GAS_API_KEY"]
 
@@ -375,7 +375,7 @@ else:
                         {
                             "action": "scan_verify",
                             "apiKey": api_key,
-                            "sheetIds": sheet_ids,
+                            "taisuisheetIds": taisui_sheet_ids,
                             "scannedText": scanned_text,
                             "ocrDetails": ocr_details,
                         }

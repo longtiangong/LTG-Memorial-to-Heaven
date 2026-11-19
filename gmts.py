@@ -3,7 +3,7 @@ import json
 
 import numpy as np
 from opencc import OpenCC
-from PIL import Image, ImageDraw, ImageEnhance
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from rapidocr_onnxruntime import RapidOCR
 import requests
 import streamlit as st
@@ -36,15 +36,15 @@ st.markdown(
         text-align: center;
         margin-bottom: 1rem;
     }
-    /* 縮小「拍攝燈殼上的號碼、姓名及燈名」拍照框 */
+    /* 縮小拍照框寬度，但不強制裁切上下影像 */
     [data-testid="stCameraInput"] {
         max-width: 380px;
         margin: 0 auto;
     }
     [data-testid="stCameraInput"] video,
     [data-testid="stCameraInput"] img {
-        max-height: 260px;
-        object-fit: cover;
+        max-height: none;
+        object-fit: contain;
         border-radius: 0.75rem;
     }
     </style>
@@ -63,16 +63,24 @@ def load_ocr_models():
 
 
 # * 1191425 調整OCR功能並加信心度
-def _extract_ocr_items(
-    pil_img: Image.Image,
-    ocr_engine: RapidOCR,
-    converter: OpenCC,
-    source_tag: str = "主區",
-):
-    img_array = np.array(pil_img.convert("RGB"))
+def _preprocess_roi_for_ocr(roi_image: Image.Image) -> Image.Image:
+    """強化 ROI 區域對比與筆畫清晰度，協助辨識手寫編號與文字。"""
+    rgb_img = roi_image.convert("RGB")
+    auto_img = ImageOps.autocontrast(rgb_img, cutoff=1)
+    contrast_img = ImageEnhance.Contrast(auto_img).enhance(1.45)
+    sharp_img = contrast_img.filter(ImageFilter.SHARPEN)
+    return sharp_img
+
+
+# * 1191425 調整OCR功能並加信心度
+def run_ocr_with_confidence(roi_image: Image.Image, ocr_engine: RapidOCR, converter: OpenCC):
+    """僅針對 ROI 區域進行 OCR 辨識並保留逐行信心度。"""
+    processed_img = _preprocess_roi_for_ocr(roi_image)
+    img_array = np.array(processed_img)
     result, _ = ocr_engine(img_array)
 
-    extracted = []
+    lines = []
+    details = []
     if result:
         for item in result:
             _, raw_text, score = item
@@ -80,51 +88,16 @@ def _extract_ocr_items(
             if cleaned_raw:
                 trad_text = converter.convert(cleaned_raw).strip()
                 confidence = float(score)
-                extracted.append(
+                lines.append(trad_text)
+                details.append(
                     {
                         "文字": trad_text,
                         "原始輸出": cleaned_raw,
                         "信心度": f"{confidence:.2%}",
                         "信心度數值": round(confidence, 4),
-                        "來源": source_tag,
+                        "來源": "ROI",
                     }
                 )
-    return extracted
-
-
-# * 1191425 調整OCR功能並加信心度
-def run_ocr_with_confidence(image: Image.Image, ocr_engine: RapidOCR, converter: OpenCC):
-    # 適度增強對比度，協助辨識手寫筆畫與編號（如 A2）
-    rgb_img = image.convert("RGB")
-    enhanced_img = ImageEnhance.Contrast(rgb_img).enhance(1.35)
-
-    main_items = _extract_ocr_items(enhanced_img, ocr_engine, converter, source_tag="主區")
-
-    lines = []
-    details = []
-    seen_texts = set()
-
-    # 針對裁切區域上方 28% 做補強辨識，避免頂部手寫編號/字元被漏抓
-    cw, ch = enhanced_img.size
-    top_h = max(1, int(ch * 0.28))
-    top_crop = enhanced_img.crop((0, 0, cw, top_h))
-    # 放大頂部區域，提升手寫小字或連筆字元偵測率
-    top_crop = top_crop.resize((max(1, top_crop.width * 2), max(1, top_crop.height * 2)))
-    top_items = _extract_ocr_items(top_crop, ocr_engine, converter, source_tag="頂部補強")
-
-    for row in top_items:
-        norm_key = row["文字"].replace(" ", "").upper()
-        if norm_key and norm_key not in seen_texts:
-            seen_texts.add(norm_key)
-            lines.append(row["文字"])
-            details.append(row)
-
-    for row in main_items:
-        norm_key = row["文字"].replace(" ", "").upper()
-        if norm_key and norm_key not in seen_texts:
-            seen_texts.add(norm_key)
-            lines.append(row["文字"])
-            details.append(row)
 
     scanned_text = "\n".join(lines).strip()
     return scanned_text, details
@@ -190,6 +163,37 @@ def crop_center_rectangle(
         offset_y_ratio=offset_y_ratio,
     )
     return pil_image.crop(box)
+
+
+def build_roi_guide_image(
+    base_image: Image.Image | None,
+    height_ratio: float,
+    aspect_w_to_h: float,
+    width_scale: float,
+    offset_x_ratio: float,
+    offset_y_ratio: float,
+) -> Image.Image:
+    """建立含 ROI 框線的對齊參考圖，協助判斷要拍攝哪些區域。"""
+    if base_image is None:
+        canvas = Image.new("RGB", (640, 480), color="#2B2F36")
+    else:
+        canvas = base_image.copy()
+
+    box = get_vertical_rect_box(
+        canvas.size,
+        height_ratio=height_ratio,
+        aspect_w_to_h=aspect_w_to_h,
+        width_scale=width_scale,
+        offset_x_ratio=offset_x_ratio,
+        offset_y_ratio=offset_y_ratio,
+    )
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle(box, outline="#00E676", width=5)
+
+    left, top, right, bottom = box
+    label_y = max(8, top - 28)
+    draw.text((left + 8, label_y), "ROI: 號碼 / 姓名 / 燈名", fill="#00E676")
+    return canvas
 
 
 # 使用瀏覽器語音合成回報上架及增修查詢結果。
@@ -264,16 +268,38 @@ if "rotate_deg" not in st.session_state:
     st.session_state["rotate_deg"] = 0
 
 st.title("🏮 光明燈上架確認")
-st.caption("拍攝燈殼後，系統會自動辨識文字、比對 300 元及 500 元工作表並記錄上架結果。")
+st.caption("拍攝燈殼後，系統會自動辨識 ROI 文字、比對 300 元及 500 元工作表並記錄上架結果。")
+
+# * 11191445 調整長方形大小
+rect_h_ratio = 0.94
+rect_aspect_w_to_h = 0.85
+rect_width_scale = 1.5
+rect_offset_x_ratio = 0.0
+rect_offset_y_ratio = -0.04
 
 # * 1191425 調整OCR功能並加信心度
-st.caption("請先按下方「Take Photo」拍照，拍照後下方會顯示直立長方形掃描框與辨識結果。")
 camera_image = st.camera_input("拍攝燈殼上的號碼、姓名及燈名")
+
 if camera_image is None:
     st.session_state["scan_image_key"] = None
     st.session_state["scan_result"] = {}
     st.session_state["scan_ocr_text"] = ""
     st.session_state["scan_ocr_details"] = []
+
+    # 尚未拍照時提供 ROI 參考框，方便判斷要對準哪些區域
+    guide_img = build_roi_guide_image(
+        None,
+        height_ratio=rect_h_ratio,
+        aspect_w_to_h=rect_aspect_w_to_h,
+        width_scale=rect_width_scale,
+        offset_x_ratio=rect_offset_x_ratio,
+        offset_y_ratio=rect_offset_y_ratio,
+    )
+    st.image(
+        guide_img,
+        caption="ROI 對齊參考框（請將燈殼上的號碼、姓名及燈名對準綠色 ROI 區）",
+        use_container_width=True,
+    )
 else:
     try:
         raw_bytes = camera_image.getvalue()
@@ -287,17 +313,9 @@ else:
             if st.button("↺ 逆時針轉 90°"):
                 st.session_state["rotate_deg"] = (st.session_state["rotate_deg"] - 90) % 360
 
-        # * 11191445 調整長方形大小
-        # 預設放大直立掃描框並略微上移，寬度放大 1.5 倍且維持直立長方形
-        rect_h_ratio = 0.94
-        rect_aspect_w_to_h = 0.85
-        rect_width_scale = 1.5
-        rect_offset_x_ratio = 0.0
-        rect_offset_y_ratio = -0.04
-
-        with st.expander("微調綠色掃描框大小與位置"):
+        with st.expander("微調 ROI 掃描區域大小與位置"):
             rect_h_ratio = st.slider(
-                "框高比例", min_value=0.40, max_value=0.98, value=rect_h_ratio, step=0.02
+                "ROI 高比例", min_value=0.40, max_value=0.98, value=rect_h_ratio, step=0.02
             )
             rect_aspect_w_to_h = st.slider(
                 "直立寬高比（小於 1 為直立）",
@@ -338,8 +356,24 @@ else:
         if rotate_deg != 0:
             image = image.rotate(-rotate_deg, expand=True)
 
+        # 上方 ROI 對齊檢視圖
+        roi_guide_preview = build_roi_guide_image(
+            image,
+            height_ratio=rect_h_ratio,
+            aspect_w_to_h=rect_aspect_w_to_h,
+            width_scale=rect_width_scale,
+            offset_x_ratio=rect_offset_x_ratio,
+            offset_y_ratio=rect_offset_y_ratio,
+        )
+        st.image(
+            roi_guide_preview,
+            caption="拍攝 ROI 區域標示（綠色框內為實際辨識範圍）",
+            use_container_width=True,
+        )
+
         # * 11191445 調整長方形大小
-        box_coords = get_vertical_rect_box(
+        # 僅裁切出 ROI 區域，下方顯示與實際送入 OCR 辨識完全一致的 ROI 畫面
+        roi_box = get_vertical_rect_box(
             image.size,
             height_ratio=rect_h_ratio,
             aspect_w_to_h=rect_aspect_w_to_h,
@@ -347,13 +381,10 @@ else:
             offset_x_ratio=rect_offset_x_ratio,
             offset_y_ratio=rect_offset_y_ratio,
         )
-        cropped_image = image.crop(box_coords)
-        preview_image = image.copy()
-        draw = ImageDraw.Draw(preview_image)
-        draw.rectangle(box_coords, outline="#00E676", width=6)
+        roi_image = image.crop(roi_box)
         st.image(
-            preview_image,
-            caption="綠色直立長方形框即為 OCR 辨識區域",
+            roi_image,
+            caption="OCR 辨識區域（僅判讀此 ROI 區域）",
             use_container_width=True,
         )
 
@@ -364,9 +395,9 @@ else:
             st.session_state["scan_ocr_details"] = []
 
             # * 1191425 調整OCR功能並加信心度
-            with st.spinner("正在進行 OCR 文字辨識..."):
+            with st.spinner("正在進行 ROI 區域 OCR 文字辨識..."):
                 scanned_text, ocr_details = run_ocr_with_confidence(
-                    cropped_image, ocr_engine, cc_converter
+                    roi_image, ocr_engine, cc_converter
                 )
 
             st.session_state["scan_ocr_text"] = scanned_text
@@ -416,7 +447,7 @@ else:
                         {
                             "文字": row["文字"],
                             "信心度": row["信心度"],
-                            "來源": row.get("來源", "主區"),
+                            "來源": row.get("來源", "ROI"),
                         }
                         for row in ocr_details
                     ]
