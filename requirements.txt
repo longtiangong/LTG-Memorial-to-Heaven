@@ -5,3 +5,4 @@ pytesseract
 streamlit-webrtc
 opencc 
 RapidOCR
+rapidocr_onnxruntime
