@@ -3,7 +3,7 @@ import json
 
 import numpy as np
 from opencc import OpenCC
-from PIL import Image, ImageDraw, ImageEnhance
+from PIL import Image, ImageEnhance
 from rapidocr_onnxruntime import RapidOCR
 import requests
 import streamlit as st
@@ -36,15 +36,15 @@ st.markdown(
         text-align: center;
         margin-bottom: 1rem;
     }
-    /* 縮小「拍攝燈殼上的號碼、姓名及燈名」拍照框 */
+    /* 縮小拍照框寬度，但不強制裁切上下影像 */
     [data-testid="stCameraInput"] {
         max-width: 380px;
         margin: 0 auto;
     }
     [data-testid="stCameraInput"] video,
     [data-testid="stCameraInput"] img {
-        max-height: 260px;
-        object-fit: cover;
+        max-height: none;
+        object-fit: contain;
         border-radius: 0.75rem;
     }
     </style>
@@ -267,7 +267,7 @@ st.title("🏮 光明燈上架確認")
 st.caption("拍攝燈殼後，系統會自動辨識文字、比對 300 元及 500 元工作表並記錄上架結果。")
 
 # * 1191425 調整OCR功能並加信心度
-st.caption("請先按下方「Take Photo」拍照，拍照後下方會顯示直立長方形掃描框與辨識結果。")
+st.caption("請先按下方「Take Photo」拍照，拍照後下方會顯示 OCR 辨識區域與結果。")
 camera_image = st.camera_input("拍攝燈殼上的號碼、姓名及燈名")
 if camera_image is None:
     st.session_state["scan_image_key"] = None
@@ -288,16 +288,15 @@ else:
                 st.session_state["rotate_deg"] = (st.session_state["rotate_deg"] - 90) % 360
 
         # * 11191445 調整長方形大小
-        # 預設放大直立掃描框並略微上移，寬度放大 1.5 倍且維持直立長方形
         rect_h_ratio = 0.94
         rect_aspect_w_to_h = 0.85
         rect_width_scale = 1.5
         rect_offset_x_ratio = 0.0
         rect_offset_y_ratio = -0.04
 
-        with st.expander("微調綠色掃描框大小與位置"):
+        with st.expander("微調 OCR 掃描區域大小與位置"):
             rect_h_ratio = st.slider(
-                "框高比例", min_value=0.40, max_value=0.98, value=rect_h_ratio, step=0.02
+                "區域高比例", min_value=0.40, max_value=0.98, value=rect_h_ratio, step=0.02
             )
             rect_aspect_w_to_h = st.slider(
                 "直立寬高比（小於 1 為直立）",
@@ -339,6 +338,7 @@ else:
             image = image.rotate(-rotate_deg, expand=True)
 
         # * 11191445 調整長方形大小
+        # 裁切出 OCR 辨識區域，直接顯示該區域讓畫面與實際辨識範圍一致
         box_coords = get_vertical_rect_box(
             image.size,
             height_ratio=rect_h_ratio,
@@ -348,12 +348,9 @@ else:
             offset_y_ratio=rect_offset_y_ratio,
         )
         cropped_image = image.crop(box_coords)
-        preview_image = image.copy()
-        draw = ImageDraw.Draw(preview_image)
-        draw.rectangle(box_coords, outline="#00E676", width=6)
         st.image(
-            preview_image,
-            caption="綠色直立長方形框即為 OCR 辨識區域",
+            cropped_image,
+            caption="OCR 辨識區域（與實際送入辨識的畫面一致）",
             use_container_width=True,
         )
 
