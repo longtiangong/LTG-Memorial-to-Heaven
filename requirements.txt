@@ -1,8 +1,7 @@
 streamlit
 requests
 Pillow
-pytesseract
-streamlit-webrtc
-opencc 
-RapidOCR
-OpenCV-Python
+numpy
+opencc-python-reimplemented
+rapidocr-onnxruntime
+opencv-python-headless
