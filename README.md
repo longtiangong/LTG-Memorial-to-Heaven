@@ -1,4 +1,5 @@
 > [!NOTE]
+> 疏文自動產出及燈殻燈名姓名確認
 > Gongming.py此系統包含：
 > - 光明燈疏文A3輸出 Gongming.py
 >   - 300元光明燈
@@ -52,3 +53,7 @@ TAISUI_SHEET_300_ID = "待提供"
 不要將真實 ID 或 API 金鑰貼入此 README 或提交到 Git。光明燈上架確認
 目前使用 `SHEET_300_ID`、`SHEET_500_ID`、`WEB_APP_URL` 及 `GAS_API_KEY`；
 太歲工作表尚未整合，取得 ID 後再設定及開放功能。
+
+
+==燈殻燈名姓名確認==
+Checkgmts.py 掃描燈殻後自動判讀是否已上架
